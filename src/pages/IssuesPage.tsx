@@ -47,6 +47,7 @@ export const IssuesPage: React.FC = () => {
     updateSafetyIssue,
     deleteSafetyIssue,
     resolveSafetyIssue,
+    verifySafetyIssue,
     user,
   } = useData();
 
@@ -63,6 +64,9 @@ export const IssuesPage: React.FC = () => {
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [resolveModalIssue, setResolveModalIssue] = useState<SafetyIssue | null>(null);
   const [resolutionText, setResolutionText] = useState('');
+  const [verifyModalIssue, setVerifyModalIssue] = useState<SafetyIssue | null>(null);
+  const [verificationText, setVerificationText] = useState('');
+  const [verificationOfficer, setVerificationOfficer] = useState(user?.name || 'Marcus Vance');
   const [editModalIssue, setEditModalIssue] = useState<SafetyIssue | null>(null);
   const [viewInspection, setViewInspection] = useState<Inspection | null>(null);
 
@@ -92,7 +96,7 @@ export const IssuesPage: React.FC = () => {
 
   // Helper to check if an issue is overdue
   const isOverdue = (iss: SafetyIssue) => {
-    return iss.status !== 'resolved' && iss.dueDate < todayStr;
+    return iss.status !== 'resolved' && iss.status !== 'verified' && iss.dueDate < todayStr;
   };
 
   // Filtered Issues List
@@ -142,6 +146,7 @@ export const IssuesPage: React.FC = () => {
   const inProgressActionsCount = issues.filter((i) => i.status === 'in_progress').length;
   const overdueActionsCount = issues.filter((i) => isOverdue(i)).length;
   const resolvedActionsCount = issues.filter((i) => i.status === 'resolved').length;
+  const verifiedActionsCount = issues.filter((i) => i.status === 'verified').length;
 
   // Handle Create Action Submit
   const handleCreateSubmit = (e: React.FormEvent) => {
@@ -224,6 +229,20 @@ export const IssuesPage: React.FC = () => {
     setResolutionText('');
   };
 
+  // Handle Verify Action Submit (Official Safety Officer Sign-off)
+  const handleVerifySubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!verifyModalIssue || !verificationText.trim()) return;
+
+    verifySafetyIssue(
+      verifyModalIssue.id,
+      verificationText.trim(),
+      verificationOfficer.trim() || user?.name || 'Marcus Vance'
+    );
+    setVerifyModalIssue(null);
+    setVerificationText('');
+  };
+
   // Handle Reopen Action
   const handleReopenAction = (iss: SafetyIssue) => {
     if (window.confirm(`Reopen action "${iss.code}: ${iss.title}"?`)) {
@@ -232,6 +251,9 @@ export const IssuesPage: React.FC = () => {
         resolutionNote: undefined,
         resolvedAt: undefined,
         resolvedBy: undefined,
+        verificationNote: undefined,
+        verifiedAt: undefined,
+        verifiedBy: undefined,
       });
     }
   };
@@ -279,16 +301,16 @@ export const IssuesPage: React.FC = () => {
               setCreateModalOpen(true);
             }}
           >
-            Create Action Item
+            Create Action
           </Button>
         }
       />
 
       {/* 1. Corrective Actions Dashboard Summary */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3.5">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         <div
           onClick={() => setStatusFilter('all')}
-          className={`p-4 rounded border transition-all cursor-pointer ${
+          className={`p-3.5 rounded border transition-all cursor-pointer ${
             statusFilter === 'all'
               ? 'bg-white border-brand-red shadow-xs ring-1 ring-brand-red'
               : 'bg-white border-brand-border hover:border-brand-graphite-400'
@@ -305,7 +327,7 @@ export const IssuesPage: React.FC = () => {
 
         <div
           onClick={() => setStatusFilter('open')}
-          className={`p-4 rounded border transition-all cursor-pointer ${
+          className={`p-3.5 rounded border transition-all cursor-pointer ${
             statusFilter === 'open'
               ? 'bg-white border-red-600 shadow-xs ring-1 ring-red-600'
               : 'bg-white border-brand-border hover:border-brand-graphite-400'
@@ -322,7 +344,7 @@ export const IssuesPage: React.FC = () => {
 
         <div
           onClick={() => setStatusFilter('in_progress')}
-          className={`p-4 rounded border transition-all cursor-pointer ${
+          className={`p-3.5 rounded border transition-all cursor-pointer ${
             statusFilter === 'in_progress'
               ? 'bg-white border-amber-600 shadow-xs ring-1 ring-amber-600'
               : 'bg-white border-brand-border hover:border-brand-graphite-400'
@@ -334,12 +356,46 @@ export const IssuesPage: React.FC = () => {
           <span className="text-2xl font-bold font-mono text-amber-700">
             {inProgressActionsCount}
           </span>
-          <span className="text-[11px] text-amber-600 block mt-0.5">Under remediation</span>
+          <span className="text-[11px] text-amber-600 block mt-0.5">Remediation active</span>
+        </div>
+
+        <div
+          onClick={() => setStatusFilter('resolved')}
+          className={`p-3.5 rounded border transition-all cursor-pointer ${
+            statusFilter === 'resolved'
+              ? 'bg-white border-sky-600 shadow-xs ring-1 ring-sky-600'
+              : 'bg-white border-brand-border hover:border-brand-graphite-400'
+          }`}
+        >
+          <span className="text-[10px] font-bold uppercase tracking-wider text-sky-700 font-mono block mb-1">
+            Remediated
+          </span>
+          <span className="text-2xl font-bold font-mono text-sky-700">
+            {resolvedActionsCount}
+          </span>
+          <span className="text-[11px] text-sky-600 block mt-0.5">Pending sign-off</span>
+        </div>
+
+        <div
+          onClick={() => setStatusFilter('verified')}
+          className={`p-3.5 rounded border transition-all cursor-pointer ${
+            statusFilter === 'verified'
+              ? 'bg-white border-emerald-600 shadow-xs ring-1 ring-emerald-600'
+              : 'bg-white border-brand-border hover:border-brand-graphite-400'
+          }`}
+        >
+          <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-800 font-mono block mb-1">
+            Verified Closed
+          </span>
+          <span className="text-2xl font-bold font-mono text-emerald-700">
+            {verifiedActionsCount}
+          </span>
+          <span className="text-[11px] text-emerald-600 block mt-0.5">Audited & signed</span>
         </div>
 
         <div
           onClick={() => setStatusFilter('overdue')}
-          className={`p-4 rounded border transition-all cursor-pointer ${
+          className={`p-3.5 rounded border transition-all cursor-pointer ${
             statusFilter === 'overdue'
               ? 'bg-red-50/70 border-red-600 shadow-xs ring-1 ring-red-600'
               : 'bg-white border-brand-border hover:border-brand-graphite-400'
@@ -355,23 +411,6 @@ export const IssuesPage: React.FC = () => {
             {overdueActionsCount}
           </span>
           <span className="text-[11px] text-red-600 block mt-0.5">Immediate follow-up</span>
-        </div>
-
-        <div
-          onClick={() => setStatusFilter('resolved')}
-          className={`p-4 rounded border transition-all cursor-pointer ${
-            statusFilter === 'resolved'
-              ? 'bg-white border-emerald-600 shadow-xs ring-1 ring-emerald-600'
-              : 'bg-white border-brand-border hover:border-brand-graphite-400'
-          }`}
-        >
-          <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-800 font-mono block mb-1">
-            Resolved & Closed
-          </span>
-          <span className="text-2xl font-bold font-mono text-emerald-700">
-            {resolvedActionsCount}
-          </span>
-          <span className="text-[11px] text-emerald-600 block mt-0.5">Closure verified</span>
         </div>
       </div>
 
@@ -398,18 +437,24 @@ export const IssuesPage: React.FC = () => {
         {/* Filter Pills and Dropdowns */}
         <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-brand-border/60 text-xs">
           {/* Status Tabs */}
-          <div className="flex items-center rounded border border-brand-border bg-brand-graphite-50 p-0.5 text-xs">
-            {(['all', 'open', 'in_progress', 'overdue', 'resolved'] as const).map((st) => (
+          <div className="flex flex-wrap items-center rounded border border-brand-border bg-brand-graphite-50 p-0.5 text-xs">
+            {(['all', 'open', 'in_progress', 'resolved', 'verified', 'overdue'] as const).map((st) => (
               <button
                 key={st}
                 onClick={() => setStatusFilter(st)}
-                className={`px-3 py-1 font-semibold rounded capitalize transition-colors ${
+                className={`px-2.5 py-1 font-semibold rounded capitalize transition-colors text-xs ${
                   statusFilter === st
                     ? 'bg-white text-brand-graphite-900 shadow-xs'
                     : 'text-brand-graphite-600 hover:text-brand-graphite-900'
                 }`}
               >
-                {st === 'overdue' ? 'Overdue' : st.replace('_', ' ')}
+                {st === 'overdue'
+                  ? 'Overdue'
+                  : st === 'resolved'
+                  ? 'Remediated (Pending Verification)'
+                  : st === 'verified'
+                  ? 'Verified Closed'
+                  : st.replace('_', ' ')}
               </button>
             ))}
           </div>
@@ -517,15 +562,23 @@ export const IssuesPage: React.FC = () => {
                     {/* Status Badge */}
                     <Badge
                       variant={
-                        issue.status === 'resolved'
+                        issue.status === 'verified'
                           ? 'success'
+                          : issue.status === 'resolved'
+                          ? 'info'
                           : issue.status === 'in_progress'
                           ? 'warning'
                           : 'critical'
                       }
                       size="sm"
                     >
-                      {st.label.toUpperCase()}
+                      {issue.status === 'verified'
+                        ? 'VERIFIED & CLOSED'
+                        : issue.status === 'resolved'
+                        ? 'REMEDIATED (PENDING VERIFICATION)'
+                        : issue.status === 'in_progress'
+                        ? 'IN PROGRESS'
+                        : 'OPEN'}
                     </Badge>
 
                     {overdue && (
@@ -554,17 +607,51 @@ export const IssuesPage: React.FC = () => {
                     </div>
                   )}
 
-                  {/* Resolution Note if resolved */}
+                  {/* Remediated (Pending Verification) Callout */}
                   {issue.status === 'resolved' && issue.resolutionNote && (
-                    <div className="p-3 bg-emerald-50 rounded border border-emerald-200 text-xs text-emerald-950 mb-3 space-y-1">
-                      <div className="flex items-center gap-1.5 font-bold text-emerald-900">
-                        <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" />
-                        <span>Remediation & Closure Verified:</span>
+                    <div className="p-3 bg-amber-50/80 rounded border border-amber-200 text-xs text-amber-950 mb-3 space-y-1.5">
+                      <div className="flex items-center gap-1.5 font-bold text-amber-900">
+                        <Clock className="w-4 h-4 text-amber-600 flex-shrink-0" />
+                        <span>Physical Remediation Completed (Awaiting Safety Officer Sign-off):</span>
                       </div>
-                      <p className="leading-relaxed pl-5">{issue.resolutionNote}</p>
+                      <p className="leading-relaxed pl-5 font-mono text-[11px] text-amber-900 bg-amber-100/50 p-2 rounded">
+                        {issue.resolutionNote}
+                      </p>
+                      <div className="pl-5 text-[10px] text-amber-800 font-mono flex items-center justify-between">
+                        <span>
+                          Remediated by <strong>{issue.resolvedBy || 'Technician'}</strong> on{' '}
+                          {issue.resolvedAt ? formatDateString(issue.resolvedAt) : 'Recently'}
+                        </span>
+                        <span className="font-semibold text-amber-900 underline">
+                          Pending Verification Audit
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Verified & Closed Formal Sign-off Callout */}
+                  {issue.status === 'verified' && (
+                    <div className="p-3 bg-emerald-50 rounded border border-emerald-300 text-xs text-emerald-950 mb-3 space-y-2">
+                      <div className="flex items-center gap-1.5 font-bold text-emerald-900">
+                        <ShieldCheck className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+                        <span>Verified Closure & Regulatory Sign-off:</span>
+                      </div>
+                      {issue.resolutionNote && (
+                        <div className="pl-5 text-[11px] text-emerald-900">
+                          <span className="font-semibold">Remediation:</span> {issue.resolutionNote}
+                        </div>
+                      )}
+                      {issue.verificationNote && (
+                        <div className="pl-5 p-2 bg-emerald-100/70 rounded border border-emerald-200 font-mono text-[11px] text-emerald-950">
+                          <span className="font-bold block text-[10px] uppercase text-emerald-800">
+                            Safety Officer Verification Note:
+                          </span>
+                          {issue.verificationNote}
+                        </div>
+                      )}
                       <div className="pl-5 text-[10px] text-emerald-800 font-mono">
-                        Verified by <strong>{issue.resolvedBy || 'Authorized Lead'}</strong> on{' '}
-                        {issue.resolvedAt ? formatDateString(issue.resolvedAt) : 'Recently'}
+                        Audited and officially closed by <strong>{issue.verifiedBy || 'Marcus Vance (Safety Lead)'}</strong> on{' '}
+                        {issue.verifiedAt ? formatDateString(issue.verifiedAt) : 'Recently'}
                       </div>
                     </div>
                   )}
@@ -593,68 +680,93 @@ export const IssuesPage: React.FC = () => {
 
                 {/* Status Action Buttons */}
                 <div className="flex md:flex-col items-center md:items-end justify-between md:justify-start gap-2 flex-shrink-0 pt-3 md:pt-0 border-t md:border-t-0 border-brand-border/60">
-                  {issue.status !== 'resolved' ? (
-                    <>
-                      <div className="flex items-center gap-2">
-                        {issue.status === 'open' ? (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => handleStatusQuickChange(issue.id, 'in_progress')}
-                          >
-                            Mark In Progress
-                          </Button>
-                        ) : (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => handleStatusQuickChange(issue.id, 'open')}
-                          >
-                            Mark Open
-                          </Button>
-                        )}
+                  {issue.status === 'open' && (
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleStatusQuickChange(issue.id, 'in_progress')}
+                      >
+                        Start Work
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="primary"
+                        icon={CheckCircle2}
+                        onClick={() => {
+                          setResolveModalIssue(issue);
+                          setResolutionText(
+                            issue.title.toLowerCase().includes('extinguisher')
+                              ? 'Cylinder inspected, pressure verified in green operating zone, and service tag re-certified.'
+                              : issue.title.toLowerCase().includes('stairwell') || issue.title.toLowerCase().includes('egress')
+                              ? 'Obstruction cleared completely. Corridor and stair landing restored to minimum 1.5m clearance.'
+                              : 'Corrective remediation completed and verified operational.'
+                          );
+                        }}
+                      >
+                        Remediate
+                      </Button>
+                    </div>
+                  )}
 
-                        <Button
-                          size="sm"
-                          variant="primary"
-                          icon={CheckCircle2}
-                          onClick={() => {
-                            setResolveModalIssue(issue);
-                            setResolutionText(
-                              issue.title.toLowerCase().includes('extinguisher')
-                                ? 'Cylinder inspected, pressure verified in green operating zone, and service tag re-certified.'
-                                : issue.title.toLowerCase().includes('stairwell') || issue.title.toLowerCase().includes('egress')
-                                ? 'Obstruction cleared completely. Corridor and stair landing restored to minimum 1.5m clearance.'
-                                : 'Corrective remediation completed and verified operational.'
-                            );
-                          }}
-                        >
-                          Resolve & Close
-                        </Button>
-                      </div>
+                  {issue.status === 'in_progress' && (
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleStatusQuickChange(issue.id, 'open')}
+                      >
+                        Mark Open
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="primary"
+                        icon={CheckCircle2}
+                        onClick={() => {
+                          setResolveModalIssue(issue);
+                          setResolutionText(
+                            issue.title.toLowerCase().includes('extinguisher')
+                              ? 'Cylinder inspected, pressure verified in green operating zone, and service tag re-certified.'
+                              : issue.title.toLowerCase().includes('stairwell') || issue.title.toLowerCase().includes('egress')
+                              ? 'Obstruction cleared completely. Corridor and stair landing restored to minimum 1.5m clearance.'
+                              : 'Corrective remediation completed and verified operational.'
+                          );
+                        }}
+                      >
+                        Mark Remediated
+                      </Button>
+                    </div>
+                  )}
 
-                      <div className="flex items-center gap-1 mt-1">
-                        <button
-                          onClick={() => handleOpenEdit(issue)}
-                          className="p-1.5 text-brand-graphite-500 hover:text-brand-graphite-900 rounded hover:bg-brand-graphite-100 transition-colors flex items-center gap-1 text-xs"
-                          title="Edit action assignment or priority"
-                        >
-                          <Edit3 className="w-3.5 h-3.5" />
-                          <span className="hidden sm:inline text-[11px] font-mono">Edit</span>
-                        </button>
+                  {issue.status === 'resolved' && (
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        icon={RotateCcw}
+                        onClick={() => handleReopenAction(issue)}
+                        className="text-xs"
+                      >
+                        Reopen
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="primary"
+                        icon={ShieldCheck}
+                        onClick={() => {
+                          setVerifyModalIssue(issue);
+                          setVerificationOfficer(user?.name || 'Marcus Vance');
+                          setVerificationText(
+                            'Physical inspection conducted on-site. Replacement verified operational and compliant with institutional fire and life safety code.'
+                          );
+                        }}
+                      >
+                        Verify & Close
+                      </Button>
+                    </div>
+                  )}
 
-                        {isAdmin && (
-                          <button
-                            onClick={() => handleDeleteAction(issue)}
-                            className="p-1.5 text-brand-graphite-400 hover:text-red-600 rounded hover:bg-brand-graphite-100 transition-colors"
-                            title="Delete Action Item"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                      </div>
-                    </>
-                  ) : (
+                  {issue.status === 'verified' && (
                     <div className="flex items-center gap-2">
                       <Button
                         size="sm"
@@ -665,17 +777,30 @@ export const IssuesPage: React.FC = () => {
                       >
                         Reopen Action
                       </Button>
-                      {isAdmin && (
-                        <button
-                          onClick={() => handleDeleteAction(issue)}
-                          className="p-1.5 text-brand-graphite-400 hover:text-red-600 rounded transition-colors"
-                          title="Delete Action Item"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      )}
                     </div>
                   )}
+
+                  {/* Secondary Edit & Delete Controls */}
+                  <div className="flex items-center gap-1 mt-1">
+                    <button
+                      onClick={() => handleOpenEdit(issue)}
+                      className="p-1.5 text-brand-graphite-500 hover:text-brand-graphite-900 rounded hover:bg-brand-graphite-100 transition-colors flex items-center gap-1 text-xs"
+                      title="Edit action assignment or priority"
+                    >
+                      <Edit3 className="w-3.5 h-3.5" />
+                      <span className="hidden sm:inline text-[11px] font-mono">Edit</span>
+                    </button>
+
+                    {isAdmin && (
+                      <button
+                        onClick={() => handleDeleteAction(issue)}
+                        className="p-1.5 text-brand-graphite-400 hover:text-red-600 rounded hover:bg-brand-graphite-100 transition-colors"
+                        title="Delete Action Item"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             );
@@ -774,10 +899,9 @@ export const IssuesPage: React.FC = () => {
             type="date"
             value={dueDate}
             onChange={(e) => setDueDate(e.target.value)}
+            icon={Calendar}
             required
-          >
-            <Calendar className="w-4 h-4 text-brand-graphite-400" />
-          </Input>
+          />
 
           <div className="pt-3 border-t border-brand-border flex justify-end gap-2">
             <Button
@@ -795,13 +919,13 @@ export const IssuesPage: React.FC = () => {
         </form>
       </Modal>
 
-      {/* 5. Resolve & Close Action Modal */}
+      {/* 5. Resolve Action Modal */}
       {resolveModalIssue && (
         <Modal
           isOpen={!!resolveModalIssue}
           onClose={() => setResolveModalIssue(null)}
-          title={`Resolve Action: ${resolveModalIssue.code}`}
-          description={`Record physical remediation details before closing "${resolveModalIssue.title}".`}
+          title={`Remediate Defect: ${resolveModalIssue.code}`}
+          description={`Record physical remediation details for "${resolveModalIssue.title}". Once resolved, it will require Safety Officer verification to close.`}
           maxWidth="md"
         >
           <form onSubmit={handleResolveSubmit} className="space-y-4">
@@ -814,7 +938,7 @@ export const IssuesPage: React.FC = () => {
 
             <div>
               <label className="block text-xs font-semibold text-brand-graphite-700 uppercase tracking-wider mb-1 font-mono">
-                Resolution Notes & Corrective Steps Taken (Required)
+                Remediation Notes & Corrective Steps Taken (Required)
               </label>
               <textarea
                 rows={3}
@@ -836,7 +960,78 @@ export const IssuesPage: React.FC = () => {
                 Cancel
               </Button>
               <Button type="submit" variant="primary" size="sm" icon={CheckCircle2}>
-                Confirm Resolution & Close
+                Submit Remediation
+              </Button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* 5b. Verify & Sign Off Action Modal */}
+      {verifyModalIssue && (
+        <Modal
+          isOpen={!!verifyModalIssue}
+          onClose={() => setVerifyModalIssue(null)}
+          title={`Regulatory Verification & Closure: ${verifyModalIssue.code}`}
+          description={`Conduct formal sign-off to verify remediation and close ticket "${verifyModalIssue.title}".`}
+          maxWidth="md"
+        >
+          <form onSubmit={handleVerifySubmit} className="space-y-4">
+            <div className="p-3 bg-brand-graphite-50 rounded border border-brand-border text-xs text-brand-graphite-700 space-y-2">
+              <div>
+                <span className="font-bold text-brand-graphite-900 block mb-0.5">
+                  Original Defect Reported:
+                </span>
+                <p>{verifyModalIssue.description}</p>
+              </div>
+              {verifyModalIssue.resolutionNote && (
+                <div className="pt-2 border-t border-brand-border">
+                  <span className="font-bold text-emerald-800 block mb-0.5">
+                    Technician Remediation:
+                  </span>
+                  <p className="text-emerald-950 font-mono text-[11px] bg-emerald-50 p-2 rounded border border-emerald-200">
+                    {verifyModalIssue.resolutionNote}
+                  </p>
+                  <span className="text-[10px] text-brand-graphite-500 font-mono mt-1 block">
+                    Logged by {verifyModalIssue.resolvedBy || 'Technician'}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            <Input
+              label="Safety Officer / Authorized Sign-off"
+              value={verificationOfficer}
+              onChange={(e) => setVerificationOfficer(e.target.value)}
+              placeholder="e.g. Marcus Vance (Chief Safety Lead)"
+              required
+            />
+
+            <div>
+              <label className="block text-xs font-semibold text-brand-graphite-700 uppercase tracking-wider mb-1 font-mono">
+                Verification & Audit Closure Note (Required)
+              </label>
+              <textarea
+                rows={3}
+                placeholder="Confirm physical inspection on-site, compliance validation, and operational readiness..."
+                value={verificationText}
+                onChange={(e) => setVerificationText(e.target.value)}
+                required
+                className="w-full text-xs p-2 rounded border border-brand-border bg-white text-brand-graphite-900 focus:outline-none focus:border-brand-red font-sans"
+              />
+            </div>
+
+            <div className="pt-3 border-t border-brand-border flex justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setVerifyModalIssue(null)}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" variant="primary" size="sm" icon={ShieldCheck}>
+                Sign Off & Close Ticket
               </Button>
             </div>
           </form>
@@ -914,7 +1109,8 @@ export const IssuesPage: React.FC = () => {
               >
                 <option value="open">Open</option>
                 <option value="in_progress">In Progress</option>
-                <option value="resolved">Resolved</option>
+                <option value="resolved">Remediated (Pending Sign-off)</option>
+                <option value="verified">Verified & Closed</option>
               </Select>
             </div>
 
@@ -966,7 +1162,11 @@ export const IssuesPage: React.FC = () => {
                   }
                   size="sm"
                 >
-                  {viewInspection.status.toUpperCase()}
+                  {viewInspection.status === 'pending'
+                    ? 'INCOMPLETE'
+                    : viewInspection.status === 'needs_attention'
+                    ? 'NEEDS ATTENTION'
+                    : 'PASSED'}
                 </Badge>
               </div>
             </div>

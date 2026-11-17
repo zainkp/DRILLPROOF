@@ -11,6 +11,7 @@ import {
   HazardInstruction,
   HazardType,
   Inspection,
+  ChecklistItem,
   Drill,
   SafetyIssue,
   StaffMember,
@@ -53,15 +54,18 @@ interface DataContextType {
   deleteFloorEquipment: (floorId: string, eqId: string) => Floor | undefined;
   createInspection: (inspection: Omit<Inspection, 'id' | 'createdAt'>) => Inspection;
   updateInspection: (id: string, updates: Partial<Inspection>) => Inspection | undefined;
+  updateChecklistItem: (inspectionId: string, itemId: string, updates: Partial<ChecklistItem>) => Inspection | undefined;
   deleteInspection: (id: string) => boolean;
   createDrill: (drill: Omit<Drill, 'id' | 'code'>) => Drill;
   updateDrill: (id: string, updates: Partial<Drill>) => void;
+  deleteDrill: (id: string) => boolean;
   updateDrillCheckin: (drillId: string, checkinId: string, updates: Partial<Drill['floorCheckins'][0]>) => void;
   addDrillObservation: (drillId: string, obs: Omit<Drill['observations'][0], 'id'>) => void;
   createSafetyIssue: (issue: Omit<SafetyIssue, 'id' | 'code' | 'createdAt'>) => SafetyIssue;
   updateSafetyIssue: (id: string, updates: Partial<SafetyIssue>) => void;
   deleteSafetyIssue: (id: string) => boolean;
   resolveSafetyIssue: (id: string, resolutionNote: string) => void;
+  verifySafetyIssue: (id: string, verificationNote: string, verifiedBy?: string) => void;
   authenticate: (email: string, password: string) => { success: boolean; user?: User; error?: string };
   loginAsDemoUser: (role?: User['role']) => void;
   logout: () => void;
@@ -225,6 +229,12 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return res;
   }, [refresh]);
 
+  const handleUpdateChecklistItem = useCallback((inspectionId: string, itemId: string, updates: Partial<ChecklistItem>) => {
+    const res = DataService.updateChecklistItem(inspectionId, itemId, updates);
+    refresh();
+    return res;
+  }, [refresh]);
+
   const handleDeleteInspection = useCallback((id: string) => {
     const res = DataService.deleteInspection(id);
     refresh();
@@ -240,6 +250,12 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const handleUpdateDrill = useCallback((id: string, updates: Partial<Drill>) => {
     DataService.updateDrill(id, updates);
     refresh();
+  }, [refresh]);
+
+  const handleDeleteDrill = useCallback((id: string) => {
+    const res = DataService.deleteDrill(id);
+    refresh();
+    return res;
   }, [refresh]);
 
   const handleUpdateDrillCheckin = useCallback((drillId: string, checkinId: string, updates: Partial<Drill['floorCheckins'][0]>) => {
@@ -272,6 +288,12 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const handleResolveSafetyIssue = useCallback((id: string, resolutionNote: string) => {
     const actor = user?.name || 'Authorized Lead';
     DataService.resolveSafetyIssue(id, resolutionNote, actor);
+    refresh();
+  }, [refresh, user]);
+
+  const handleVerifySafetyIssue = useCallback((id: string, verificationNote: string, verifiedBy?: string) => {
+    const actor = verifiedBy || user?.name || 'Marcus Vance';
+    DataService.verifySafetyIssue(id, verificationNote, actor);
     refresh();
   }, [refresh, user]);
 
@@ -335,15 +357,18 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         deleteFloorEquipment: handleDeleteFloorEquipment,
         createInspection: handleCreateInspection,
         updateInspection: handleUpdateInspection,
+        updateChecklistItem: handleUpdateChecklistItem,
         deleteInspection: handleDeleteInspection,
         createDrill: handleCreateDrill,
         updateDrill: handleUpdateDrill,
+        deleteDrill: handleDeleteDrill,
         updateDrillCheckin: handleUpdateDrillCheckin,
         addDrillObservation: handleAddDrillObservation,
         createSafetyIssue: handleCreateSafetyIssue,
         updateSafetyIssue: handleUpdateSafetyIssue,
         deleteSafetyIssue: handleDeleteSafetyIssue,
         resolveSafetyIssue: handleResolveSafetyIssue,
+        verifySafetyIssue: handleVerifySafetyIssue,
         authenticate: handleAuthenticate,
         loginAsDemoUser: handleLoginAsDemoUser,
         logout: handleLogout,

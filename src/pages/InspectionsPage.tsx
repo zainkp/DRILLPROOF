@@ -42,6 +42,7 @@ export const InspectionsPage: React.FC = () => {
     issues,
     createInspection,
     updateInspection,
+    updateChecklistItem,
     deleteInspection,
     createSafetyIssue,
     user,
@@ -52,10 +53,12 @@ export const InspectionsPage: React.FC = () => {
   // Modal States
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [selectedInspectionId, setSelectedInspectionId] = useState<string | null>(null);
+  const [reviewItemFilter, setReviewItemFilter] = useState<'all' | 'pending' | 'needs_attention' | 'pass'>('all');
   const [createActionModalItem, setCreateActionModalItem] = useState<{
     inspection: Inspection;
     item: ChecklistItem;
   } | null>(null);
+  const [createTicketImmediately, setCreateTicketImmediately] = useState(true);
 
   // Filter States
   const [searchQuery, setSearchQuery] = useState('');
@@ -258,7 +261,45 @@ export const InspectionsPage: React.FC = () => {
     setItemActionConfigs({});
   };
 
-  // Open "Create Action from Reviewed Item" modal
+  // Helper to determine if all defects for an inspection are resolved
+  const areAllDefectsResolved = (insp: Inspection) => {
+    const defects = insp.items.filter((i) => i.status === 'needs_attention');
+    if (defects.length === 0) return true;
+    return defects.every((item) => {
+      if (!item.linkedIssueId) return false;
+      const issue = issues.find((iss) => iss.id === item.linkedIssueId);
+      return issue && issue.status === 'resolved';
+    });
+  };
+
+  // Open inspection modal with specific tab
+  const handleOpenAudit = (
+    insp: Inspection,
+    tab: 'all' | 'pending' | 'needs_attention' | 'pass' = 'all'
+  ) => {
+    setSelectedInspectionId(insp.id);
+    setReviewItemFilter(tab);
+  };
+
+  // Mark an unchecked item directly as Passed
+  const handleMarkItemPassed = (inspectionId: string, itemId: string) => {
+    updateChecklistItem(inspectionId, itemId, {
+      status: 'pass',
+    });
+  };
+
+  // Change item status (e.g. from pass back to not_checked)
+  const handleSetItemStatus = (
+    inspectionId: string,
+    itemId: string,
+    newStatus: InspectionStatus
+  ) => {
+    updateChecklistItem(inspectionId, itemId, {
+      status: newStatus,
+    });
+  };
+
+  // Open "Create Action from Reviewed Item / Flag Defect" modal
   const handleOpenCreateActionForItem = (inspection: Inspection, item: ChecklistItem) => {
     setCreateActionModalItem({ inspection, item });
     setActionTitle(`Deficiency: ${item.label}`);
@@ -272,9 +313,10 @@ export const InspectionsPage: React.FC = () => {
     const defaultStaff = staff.find((s) => s.emergencyRole === 'Facility Manager') || staff[0];
     setActionStaffId(defaultStaff?.id || '');
     setActionDueDate(new Date(Date.now() + 86400000 * 3).toISOString().split('T')[0]);
+    setCreateTicketImmediately(true);
   };
 
-  // Submit "Create Action from Reviewed Item"
+  // Submit "Create Action / Flag Defect"
   const handleSaveActionForItem = (e: React.FormEvent) => {
     e.preventDefault();
     if (!createActionModalItem) return;
@@ -282,29 +324,44 @@ export const InspectionsPage: React.FC = () => {
     const { inspection, item } = createActionModalItem;
     const assignedStaff = staff.find((s) => s.id === actionStaffId) || staff[0];
 
-    const newIssue = createSafetyIssue({
-      institutionId: inspection.institutionId,
-      buildingId: inspection.buildingId,
-      buildingName: inspection.buildingName,
-      floorId: inspection.floorId,
-      floorLabel: inspection.floorLabel || 'General Facility',
-      sourceType: 'inspection',
-      sourceId: inspection.id,
-      checklistItemId: item.id,
-      checklistItemLabel: item.label,
-      title: actionTitle.trim(),
-      description: actionDescription.trim(),
-      priority: actionPriority,
-      assignedToName: assignedStaff?.name || 'Facilities Maintenance Supervisor',
-      assignedToRole: assignedStaff?.emergencyRole || 'Facility Manager',
-      assignedToId: assignedStaff?.id,
-      dueDate: actionDueDate,
-      status: 'open',
-    });
+    let linkedIssueId: string | undefined = item.linkedIssueId;
+    let flaggedAsIssue = item.flaggedAsIssue || false;
 
-    // Link this issue to the inspection item without modifying historical inspection score/status
+    if (createTicketImmediately) {
+      const newIssue = createSafetyIssue({
+        institutionId: inspection.institutionId,
+        buildingId: inspection.buildingId,
+        buildingName: inspection.buildingName,
+        floorId: inspection.floorId,
+        floorLabel: inspection.floorLabel || 'General Facility',
+        sourceType: 'inspection',
+        sourceId: inspection.id,
+        checklistItemId: item.id,
+        checklistItemLabel: item.label,
+        title: actionTitle.trim(),
+        description: actionDescription.trim(),
+        priority: actionPriority,
+        assignedToName: assignedStaff?.name || 'Facilities Maintenance Supervisor',
+        assignedToRole: assignedStaff?.emergencyRole || 'Facility Manager',
+        assignedToId: assignedStaff?.id,
+        dueDate: actionDueDate,
+        status: 'open',
+      });
+      linkedIssueId = newIssue.id;
+      flaggedAsIssue = true;
+    }
+
+    // Update this item in the inspection: set status to 'needs_attention', update notes, link ticket
     const updatedItems = inspection.items.map((it) =>
-      it.id === item.id ? { ...it, linkedIssueId: newIssue.id, flaggedAsIssue: true } : it
+      it.id === item.id
+        ? {
+            ...it,
+            status: 'needs_attention' as InspectionStatus,
+            notes: actionDescription.trim(),
+            linkedIssueId,
+            flaggedAsIssue,
+          }
+        : it
     );
     updateInspection(inspection.id, { items: updatedItems });
 
@@ -331,9 +388,14 @@ export const InspectionsPage: React.FC = () => {
       }
       // Status filter
       if (filterStatus !== 'all') {
-        if (filterStatus === 'passed' && insp.status !== 'passed') return false;
-        if (filterStatus === 'needs_attention' && insp.status !== 'needs_attention') return false;
-        if (filterStatus === 'pending' && insp.status !== 'pending') return false;
+        const isIncomplete = (insp.notCheckedCount || 0) > 0 || insp.status === 'pending';
+        const allResolved = areAllDefectsResolved(insp);
+        const hasDefects = (insp.attentionCount || 0) > 0;
+
+        if (filterStatus === 'pending' && !isIncomplete) return false;
+        if (filterStatus === 'passed' && (isIncomplete || hasDefects)) return false;
+        if (filterStatus === 'needs_attention' && (isIncomplete || !hasDefects || allResolved)) return false;
+        if (filterStatus === 'actions_resolved' && (isIncomplete || !hasDefects || !allResolved)) return false;
       }
       // Category filter
       if (filterCategory !== 'all' && insp.category !== filterCategory) {
@@ -352,15 +414,41 @@ export const InspectionsPage: React.FC = () => {
       }
       return true;
     });
-  }, [inspections, filterBuildingId, filterStatus, filterCategory, searchQuery]);
+  }, [inspections, filterBuildingId, filterStatus, filterCategory, searchQuery, issues]);
 
   // Overall Statistics Derived From Actual Data
   const totalInspectionsCount = inspections.length;
-  const passedInspectionsCount = inspections.filter((i) => i.status === 'passed').length;
-  const attentionInspectionsCount = inspections.filter((i) => i.status === 'needs_attention').length;
-  const pendingInspectionsCount = inspections.filter((i) => i.status === 'pending').length;
+  const pendingInspectionsCount = inspections.filter(
+    (i) => (i.notCheckedCount || 0) > 0 || i.status === 'pending'
+  ).length;
+  const attentionInspectionsCount = inspections.filter((i) => {
+    if ((i.notCheckedCount || 0) > 0 || i.status === 'pending') return false;
+    return (i.attentionCount || 0) > 0 && !areAllDefectsResolved(i);
+  }).length;
+  const passedInspectionsCount = inspections.filter(
+    (i) => (i.notCheckedCount || 0) === 0 && (i.attentionCount || 0) === 0
+  ).length;
+  const resolvedInspectionsCount = inspections.filter((i) => {
+    if ((i.notCheckedCount || 0) > 0 || i.status === 'pending') return false;
+    return (i.attentionCount || 0) > 0 && areAllDefectsResolved(i);
+  }).length;
 
   const selectedInspection = inspections.find((i) => i.id === selectedInspectionId);
+
+  // Filtered items inside the Review Modal
+  const reviewItems = useMemo(() => {
+    if (!selectedInspection) return [];
+    if (reviewItemFilter === 'pending') {
+      return selectedInspection.items.filter((i) => i.status === 'not_checked');
+    }
+    if (reviewItemFilter === 'needs_attention') {
+      return selectedInspection.items.filter((i) => i.status === 'needs_attention');
+    }
+    if (reviewItemFilter === 'pass') {
+      return selectedInspection.items.filter((i) => i.status === 'pass');
+    }
+    return selectedInspection.items;
+  }, [selectedInspection, reviewItemFilter]);
 
   return (
     <div className="space-y-6">
@@ -387,7 +475,7 @@ export const InspectionsPage: React.FC = () => {
                 setCreateModalOpen(true);
               }}
             >
-              Record New Inspection
+              Create Inspection
             </Button>
           </div>
         }
@@ -484,9 +572,10 @@ export const InspectionsPage: React.FC = () => {
             className="rounded border border-brand-border px-2.5 py-1 text-xs text-brand-graphite-800 bg-white font-medium focus:outline-none"
           >
             <option value="all">All Statuses</option>
-            <option value="passed">Passed (100% Clear)</option>
-            <option value="needs_attention">Needs Attention</option>
-            <option value="pending">Incomplete / Pending</option>
+            <option value="passed">Passed (100% Compliant)</option>
+            <option value="needs_attention">Needs Attention (Open Defects)</option>
+            <option value="actions_resolved">Actions Resolved (Defects Remediated)</option>
+            <option value="pending">Incomplete / Pending Verification</option>
           </select>
 
           {/* Category Filter */}
@@ -544,11 +633,12 @@ export const InspectionsPage: React.FC = () => {
               const pass = insp.items.filter((i) => i.status === 'pass').length;
               const attn = insp.items.filter((i) => i.status === 'needs_attention').length;
               const unchk = insp.items.filter((i) => i.status === 'not_checked').length;
+              const allResolved = areAllDefectsResolved(insp);
 
               return (
                 <div
                   key={insp.id}
-                  onClick={() => setSelectedInspectionId(insp.id)}
+                  onClick={() => handleOpenAudit(insp, 'all')}
                   className="p-4 sm:p-5 hover:bg-brand-graphite-50/70 transition-colors cursor-pointer flex flex-col md:flex-row md:items-center justify-between gap-4 group"
                 >
                   <div className="flex-1">
@@ -561,22 +651,25 @@ export const InspectionsPage: React.FC = () => {
                           {insp.floorLabel}
                         </span>
                       )}
-                      <Badge
-                        variant={
-                          insp.status === 'passed'
-                            ? 'success'
-                            : insp.status === 'needs_attention'
-                            ? 'critical'
-                            : 'warning'
-                        }
-                        size="sm"
-                      >
-                        {insp.status === 'passed'
-                          ? 'PASSED'
-                          : insp.status === 'needs_attention'
-                          ? 'NEEDS ATTENTION'
-                          : 'INCOMPLETE'}
-                      </Badge>
+                      {unchk > 0 ? (
+                        <Badge variant="warning" size="sm">
+                          INCOMPLETE ({unchk} PENDING)
+                        </Badge>
+                      ) : attn > 0 ? (
+                        allResolved ? (
+                          <Badge variant="success" size="sm">
+                            ACTIONS RESOLVED
+                          </Badge>
+                        ) : (
+                          <Badge variant="critical" size="sm">
+                            NEEDS ATTENTION
+                          </Badge>
+                        )
+                      ) : (
+                        <Badge variant="success" size="sm">
+                          PASSED
+                        </Badge>
+                      )}
 
                       {insp.category && (
                         <span className="text-[10px] font-mono text-brand-graphite-500 bg-white px-1.5 py-0.5 rounded border border-brand-border">
@@ -595,7 +688,7 @@ export const InspectionsPage: React.FC = () => {
                       <span>
                         Results: <strong className="text-emerald-700">{pass} Pass</strong> &bull;{' '}
                         <strong className="text-red-600">{attn} Defect{attn !== 1 ? 's' : ''}</strong>
-                        {unchk > 0 && <span> &bull; <strong className="text-amber-600">{unchk} Unchecked</strong></span>}
+                        {unchk > 0 && <span> &bull; <strong className="text-amber-600">{unchk} Pending Verification</strong></span>}
                       </span>
                     </div>
                   </div>
@@ -616,10 +709,36 @@ export const InspectionsPage: React.FC = () => {
                       >
                         {insp.score}%
                       </span>
+                      {unchk > 0 && (
+                        <span className="text-[10px] text-amber-600 block font-mono">
+                          {unchk} unchecked
+                        </span>
+                      )}
                     </div>
 
                     <div className="flex items-center gap-2">
-                      <Button size="sm" variant="outline">
+                      {unchk > 0 && (
+                        <Button
+                          size="sm"
+                          variant="primary"
+                          icon={ClipboardCheck}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleOpenAudit(insp, 'pending');
+                          }}
+                          className="text-xs bg-amber-600 hover:bg-amber-700 text-white border-none font-medium shadow-xs"
+                        >
+                          Continue Verification ({unchk})
+                        </Button>
+                      )}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleOpenAudit(insp, 'all');
+                        }}
+                      >
                         View Audit
                       </Button>
                       {isAdmin && (
@@ -714,10 +833,9 @@ export const InspectionsPage: React.FC = () => {
               type="date"
               value={inspectionDate}
               onChange={(e) => setInspectionDate(e.target.value)}
+              icon={Calendar}
               required
-            >
-              <Calendar className="w-4 h-4 text-brand-graphite-400" />
-            </Input>
+            />
           </div>
 
           {/* Structured Verification Checklist */}
@@ -743,7 +861,7 @@ export const InspectionsPage: React.FC = () => {
                           {idx + 1}. {item.label}
                         </span>
                         <span className="text-[10px] font-mono text-brand-graphite-500 uppercase mt-0.5 block">
-                          Domain: {item.category.replace(/_/g, ' ')}
+                          Domain: {(item.category || 'general_safety').replace(/_/g, ' ')}
                         </span>
                       </div>
 
@@ -956,58 +1074,126 @@ export const InspectionsPage: React.FC = () => {
         >
           <div className="space-y-4">
             {/* Header Result Card */}
-            <div className="p-4 bg-brand-graphite-50 rounded border border-brand-border flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div>
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="font-bold text-sm text-brand-graphite-900">
-                    {selectedInspection.buildingName}
-                  </span>
-                  <span className="text-xs font-mono text-brand-graphite-600 bg-white px-1.5 py-0.5 rounded border border-brand-border">
-                    {selectedInspection.floorLabel || 'All Floors'}
-                  </span>
-                  <Badge
-                    variant={
-                      selectedInspection.status === 'passed'
-                        ? 'success'
-                        : selectedInspection.status === 'needs_attention'
-                        ? 'critical'
-                        : 'warning'
-                    }
-                    size="sm"
-                  >
-                    {selectedInspection.status === 'passed'
-                      ? 'PASSED'
-                      : selectedInspection.status === 'needs_attention'
-                      ? 'NEEDS ATTENTION'
-                      : 'INCOMPLETE'}
-                  </Badge>
-                </div>
-                <p className="text-xs text-brand-graphite-600 leading-relaxed font-sans">
-                  {selectedInspection.notes || 'Inspection findings recorded.'}
-                </p>
-              </div>
+            {(() => {
+              const modalIsIncomplete = (selectedInspection.notCheckedCount || 0) > 0 || selectedInspection.status === 'pending';
+              const modalHasDefects = (selectedInspection.attentionCount || 0) > 0;
+              const modalAllResolved = areAllDefectsResolved(selectedInspection);
 
-              <div className="text-left sm:text-right flex-shrink-0">
-                <span className="text-[10px] uppercase font-mono font-bold text-brand-graphite-400 block">
-                  Compliance Score
-                </span>
-                <span
-                  className={`text-2xl font-mono font-bold ${
-                    selectedInspection.score >= 90
-                      ? 'text-emerald-700'
-                      : selectedInspection.score >= 70
-                      ? 'text-amber-700'
-                      : 'text-red-700'
-                  }`}
-                >
-                  {selectedInspection.score}%
-                </span>
-              </div>
-            </div>
+              return (
+                <>
+                  <div className="p-4 bg-brand-graphite-50 rounded border border-brand-border flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2 mb-1.5">
+                        <span className="font-bold text-sm text-brand-graphite-900">
+                          {selectedInspection.buildingName}
+                        </span>
+                        <span className="text-xs font-mono text-brand-graphite-600 bg-white px-1.5 py-0.5 rounded border border-brand-border">
+                          {selectedInspection.floorLabel || 'All Floors / Full Facility'}
+                        </span>
+                        {modalIsIncomplete ? (
+                          <Badge variant="warning" size="sm">
+                            INCOMPLETE &bull; PENDING VERIFICATION ({selectedInspection.notCheckedCount} UNCHECKED)
+                          </Badge>
+                        ) : modalHasDefects ? (
+                          modalAllResolved ? (
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <Badge variant="default" size="sm">
+                                AUDIT FINDING: DEFICIENCIES RECORDED
+                              </Badge>
+                              <Badge variant="success" size="sm">
+                                REMEDIATION: ALL ACTIONS RESOLVED
+                              </Badge>
+                            </div>
+                          ) : (
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <Badge variant="critical" size="sm">
+                                AUDIT FINDING: NEEDS ATTENTION
+                              </Badge>
+                              <Badge variant="critical" size="sm">
+                                OPEN ACTIONS PENDING
+                              </Badge>
+                            </div>
+                          )
+                        ) : (
+                          <Badge variant="success" size="sm">
+                            PASSED &bull; 100% COMPLIANT
+                          </Badge>
+                        )}
+                      </div>
+                      <p className="text-xs text-brand-graphite-600 leading-relaxed font-sans">
+                        {selectedInspection.notes || 'Inspection findings recorded.'}
+                      </p>
+                      {modalIsIncomplete && (
+                        <p className="text-[11px] font-mono text-amber-800 mt-1 flex items-center gap-1">
+                          <Clock className="w-3 h-3" />
+                          <span>Verification in progress: {(selectedInspection.passedCount || 0) + (selectedInspection.attentionCount || 0)} of {selectedInspection.items.length} checklist items verified.</span>
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="text-left sm:text-right flex-shrink-0">
+                      <span className="text-[10px] uppercase font-mono font-bold text-brand-graphite-400 block">
+                        Compliance Score
+                      </span>
+                      <span
+                        className={`text-2xl font-mono font-bold ${
+                          selectedInspection.score >= 90
+                            ? 'text-emerald-700'
+                            : selectedInspection.score >= 70
+                            ? 'text-amber-700'
+                            : 'text-red-700'
+                        }`}
+                      >
+                        {selectedInspection.score}%
+                      </span>
+                      <span className="text-[10px] block font-mono text-brand-graphite-500">
+                        {modalIsIncomplete
+                          ? `Evaluated on ${(selectedInspection.passedCount || 0) + (selectedInspection.attentionCount || 0)} checked`
+                          : modalHasDefects && modalAllResolved
+                          ? 'Audit score (all issues closed)'
+                          : modalHasDefects
+                          ? 'Audit score (defects active)'
+                          : 'Final compliance score'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Context Alert Banners */}
+                  {modalIsIncomplete && (
+                    <div className="p-3 bg-amber-50 border border-amber-200 rounded flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-amber-950 animate-fadeIn">
+                      <div className="flex items-start sm:items-center gap-2">
+                        <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5 sm:mt-0" />
+                        <span>
+                          <strong>Pending Verification:</strong> {selectedInspection.notCheckedCount} item(s) have not been checked yet. Complete the verification for each item below to finish this audit.
+                        </span>
+                      </div>
+                      {reviewItemFilter !== 'pending' && (
+                        <button
+                          type="button"
+                          onClick={() => setReviewItemFilter('pending')}
+                          className="text-xs text-amber-900 font-bold underline hover:text-brand-red flex-shrink-0 whitespace-nowrap"
+                        >
+                          View Pending Items ({selectedInspection.notCheckedCount}) &rarr;
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {!modalIsIncomplete && modalHasDefects && modalAllResolved && (
+                    <div className="p-3 bg-emerald-50 border border-emerald-200 rounded flex items-center gap-2 text-xs text-emerald-950 animate-fadeIn">
+                      <ShieldCheck className="w-4 h-4 text-emerald-700 flex-shrink-0" />
+                      <span>
+                        <strong>All Deficiencies Remediated:</strong> All corrective actions linked to this audit have been verified and signed off. The historical inspection record remains intact for audit compliance.
+                      </span>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
 
             {/* Checklist Results Log */}
             <div className="space-y-2">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                 <span className="text-xs font-bold uppercase tracking-wider text-brand-graphite-800 font-mono">
                   Itemized Verification Log ({selectedInspection.items.length} items)
                 </span>
@@ -1018,116 +1204,256 @@ export const InspectionsPage: React.FC = () => {
                   &bull;{' '}
                   <span className="text-red-600 font-bold">
                     {selectedInspection.items.filter((i) => i.status === 'needs_attention').length} Attention
+                  </span>{' '}
+                  &bull;{' '}
+                  <span className="text-amber-600 font-bold">
+                    {selectedInspection.items.filter((i) => i.status === 'not_checked').length} Unchecked
                   </span>
                 </div>
               </div>
 
+              {/* Item Filter Tabs */}
+              <div className="flex flex-wrap items-center gap-1.5 border-b border-brand-border/70 pb-2 text-xs font-mono">
+                <button
+                  type="button"
+                  onClick={() => setReviewItemFilter('all')}
+                  className={`px-2.5 py-1 rounded transition-colors text-[11px] font-semibold ${
+                    reviewItemFilter === 'all'
+                      ? 'bg-brand-graphite-900 text-white'
+                      : 'text-brand-graphite-600 hover:bg-brand-graphite-100'
+                  }`}
+                >
+                  All Items ({selectedInspection.items.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setReviewItemFilter('pending')}
+                  className={`px-2.5 py-1 rounded transition-colors text-[11px] font-semibold flex items-center gap-1 ${
+                    reviewItemFilter === 'pending'
+                      ? 'bg-amber-600 text-white'
+                      : 'text-amber-800 hover:bg-amber-50'
+                  }`}
+                >
+                  <Clock className="w-3 h-3" />
+                  <span>Pending Verification ({selectedInspection.items.filter((i) => i.status === 'not_checked').length})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setReviewItemFilter('needs_attention')}
+                  className={`px-2.5 py-1 rounded transition-colors text-[11px] font-semibold flex items-center gap-1 ${
+                    reviewItemFilter === 'needs_attention'
+                      ? 'bg-brand-red text-white'
+                      : 'text-brand-red hover:bg-red-50'
+                  }`}
+                >
+                  <AlertTriangle className="w-3 h-3" />
+                  <span>Deficiencies ({selectedInspection.items.filter((i) => i.status === 'needs_attention').length})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setReviewItemFilter('pass')}
+                  className={`px-2.5 py-1 rounded transition-colors text-[11px] font-semibold flex items-center gap-1 ${
+                    reviewItemFilter === 'pass'
+                      ? 'bg-emerald-700 text-white'
+                      : 'text-emerald-700 hover:bg-emerald-50'
+                  }`}
+                >
+                  <CheckCircle2 className="w-3 h-3" />
+                  <span>Passed ({selectedInspection.items.filter((i) => i.status === 'pass').length})</span>
+                </button>
+              </div>
+
+              {/* Items List */}
               <div className="divide-y divide-brand-border border border-brand-border rounded max-h-[55vh] overflow-y-auto">
-                {selectedInspection.items.map((item, idx) => {
-                  // Check if a linked corrective action exists in the data model
-                  const linkedAction = issues.find(
-                    (iss) =>
-                      (item.linkedIssueId && iss.id === item.linkedIssueId) ||
-                      (iss.sourceId === selectedInspection.id &&
-                        (iss.checklistItemId === item.id || iss.title.includes(item.label)))
-                  );
+                {reviewItems.length === 0 ? (
+                  <div className="p-8 text-center text-xs text-brand-graphite-500 bg-brand-graphite-50/50">
+                    No items in this inspection match the &quot;{reviewItemFilter.replace('_', ' ')}&quot; filter.
+                  </div>
+                ) : (
+                  reviewItems.map((item) => {
+                    const originalIdx = selectedInspection.items.findIndex((i) => i.id === item.id);
+                    // Check if a linked corrective action exists in the data model
+                    const linkedAction = issues.find(
+                      (iss) =>
+                        (item.linkedIssueId && iss.id === item.linkedIssueId) ||
+                        (iss.sourceId === selectedInspection.id &&
+                          (iss.checklistItemId === item.id || iss.title.includes(item.label)))
+                    );
 
-                  return (
-                    <div key={item.id} className="p-3.5 text-xs hover:bg-brand-graphite-50/40 transition-colors">
-                      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2">
-                        <div className="flex-1">
-                          <div className="flex items-start gap-2">
-                            <span className="font-mono text-brand-graphite-400 flex-shrink-0 mt-0.5">
-                              {idx + 1}.
-                            </span>
-                            <div>
-                              <span className="font-semibold text-brand-graphite-900 leading-snug block">
-                                {item.label}
+                    return (
+                      <div key={item.id} className="p-3.5 text-xs hover:bg-brand-graphite-50/40 transition-colors">
+                        <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2">
+                          <div className="flex-1">
+                            <div className="flex items-start gap-2">
+                              <span className="font-mono text-brand-graphite-400 flex-shrink-0 mt-0.5">
+                                {originalIdx + 1}.
                               </span>
-                              <span className="text-[10px] font-mono text-brand-graphite-400 uppercase">
-                                Domain: {item.category.replace(/_/g, ' ')}
-                              </span>
-                            </div>
-                          </div>
-
-                          {/* Finding Note */}
-                          {item.notes && (
-                            <div className="mt-2 p-2 bg-amber-50 rounded border border-amber-200 text-amber-900 text-[11px] flex items-start gap-1.5">
-                              <AlertTriangle className="w-3.5 h-3.5 text-amber-600 flex-shrink-0 mt-0.5" />
                               <div>
-                                <span className="font-bold">Observation:</span> {item.notes}
+                                <span className="font-semibold text-brand-graphite-900 leading-snug block">
+                                  {item.label}
+                                </span>
+                                <span className="text-[10px] font-mono text-brand-graphite-400 uppercase">
+                                  Domain: {(item.category || 'general_safety').replace(/_/g, ' ')}
+                                </span>
                               </div>
                             </div>
-                          )}
 
-                          {/* Linked Action Status or Creation Affordance */}
-                          {item.status === 'needs_attention' && (
-                            <div className="mt-2.5 pt-2 border-t border-brand-border/60">
-                              {linkedAction ? (
-                                <div className="flex flex-wrap items-center justify-between gap-2 p-2 bg-emerald-50/70 border border-emerald-200 rounded">
-                                  <div className="flex items-center gap-1.5 text-[11px] text-emerald-950 font-medium">
-                                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-700 flex-shrink-0" />
-                                    <span>
-                                      Corrective Action <strong>{linkedAction.code}</strong>: Assigned to{' '}
-                                      <strong>{linkedAction.assignedToName}</strong>
-                                    </span>
-                                  </div>
-                                  <Badge
-                                    variant={
-                                      linkedAction.status === 'resolved'
-                                        ? 'success'
-                                        : linkedAction.status === 'in_progress'
-                                        ? 'warning'
-                                        : 'critical'
-                                    }
-                                    size="sm"
-                                  >
-                                    {linkedAction.status.replace('_', ' ').toUpperCase()}
-                                  </Badge>
+                            {/* Finding Note */}
+                            {item.notes && (
+                              <div className="mt-2 p-2 bg-amber-50 rounded border border-amber-200 text-amber-900 text-[11px] flex items-start gap-1.5">
+                                <AlertTriangle className="w-3.5 h-3.5 text-amber-600 flex-shrink-0 mt-0.5" />
+                                <div>
+                                  <span className="font-bold">Observation:</span> {item.notes}
                                 </div>
-                              ) : (
-                                <div className="flex items-center justify-between gap-2 p-2 bg-red-50/70 border border-red-200 rounded">
-                                  <span className="text-[11px] text-red-900 font-medium">
-                                    Defect identified &bull; No active corrective action ticket linked yet
-                                  </span>
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    icon={Plus}
+                              </div>
+                            )}
+
+                            {/* Unchecked Item Verification Action Box */}
+                            {item.status === 'not_checked' && (
+                              <div className="mt-2.5 p-2.5 bg-amber-50/70 border border-amber-200 rounded flex flex-col sm:flex-row sm:items-center justify-between gap-2 animate-fadeIn">
+                                <span className="text-xs text-amber-950 font-medium flex items-center gap-1.5">
+                                  <Clock className="w-3.5 h-3.5 text-amber-600 flex-shrink-0" />
+                                  <span>Pending verification check. Record outcome:</span>
+                                </span>
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleMarkItemPassed(selectedInspection.id, item.id)}
+                                    className="px-2.5 py-1 text-xs font-semibold rounded bg-emerald-600 hover:bg-emerald-700 text-white transition-colors flex items-center gap-1 shadow-xs"
+                                  >
+                                    <Check className="w-3 h-3" />
+                                    <span>Mark Passed</span>
+                                  </button>
+                                  <button
+                                    type="button"
                                     onClick={() => handleOpenCreateActionForItem(selectedInspection, item)}
-                                    className="text-xs bg-white"
+                                    className="px-2.5 py-1 text-xs font-semibold rounded bg-brand-red hover:bg-red-700 text-white transition-colors flex items-center gap-1 shadow-xs"
                                   >
-                                    Create Action
-                                  </Button>
+                                    <AlertTriangle className="w-3 h-3" />
+                                    <span>Flag Defect</span>
+                                  </button>
                                 </div>
-                              )}
-                            </div>
-                          )}
-                        </div>
+                              </div>
+                            )}
 
-                        {/* Status Badge */}
-                        <div className="flex-shrink-0">
-                          <Badge
-                            variant={
-                              item.status === 'pass'
-                                ? 'success'
+                            {/* Passed Item Follow-up Indicator */}
+                            {item.status === 'pass' && (
+                              <div className="mt-1 flex items-center justify-between text-[11px] text-emerald-700 font-mono">
+                                <span className="flex items-center gap-1">
+                                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                  Verified Compliant
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenCreateActionForItem(selectedInspection, item)}
+                                  className="text-[10px] text-brand-graphite-400 hover:text-brand-red underline"
+                                >
+                                  Flag Defect
+                                </button>
+                              </div>
+                            )}
+
+                            {/* Linked Action Status or Creation Affordance */}
+                            {item.status === 'needs_attention' && (
+                              <div className="mt-2.5 pt-2 border-t border-brand-border/60">
+                                {linkedAction ? (
+                                  <div
+                                    className={`p-2.5 rounded border space-y-1.5 ${
+                                      linkedAction.status === 'resolved'
+                                        ? 'bg-emerald-50/80 border-emerald-300'
+                                        : linkedAction.status === 'in_progress'
+                                        ? 'bg-amber-50/80 border-amber-300'
+                                        : 'bg-red-50/80 border-red-300'
+                                    }`}
+                                  >
+                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                      <div className="flex items-center gap-1.5 text-[11px] font-medium text-brand-graphite-900">
+                                        <ShieldCheck
+                                          className={`w-3.5 h-3.5 flex-shrink-0 ${
+                                            linkedAction.status === 'resolved'
+                                              ? 'text-emerald-700'
+                                              : 'text-brand-red'
+                                          }`}
+                                        />
+                                        <span>
+                                          Corrective Action <strong>{linkedAction.code}</strong>: Assigned to{' '}
+                                          <strong>{linkedAction.assignedToName}</strong>
+                                        </span>
+                                      </div>
+                                      <Badge
+                                        variant={
+                                          linkedAction.status === 'resolved'
+                                            ? 'success'
+                                            : linkedAction.status === 'in_progress'
+                                            ? 'warning'
+                                            : 'critical'
+                                        }
+                                        size="sm"
+                                      >
+                                        {linkedAction.status === 'resolved'
+                                          ? 'REMEDIATION: RESOLVED'
+                                          : `ACTION: ${(linkedAction.status || 'open').replace('_', ' ').toUpperCase()}`}
+                                      </Badge>
+                                    </div>
+                                    {linkedAction.status === 'resolved' && linkedAction.resolutionNote && (
+                                      <div className="text-[11px] text-emerald-900 bg-white/80 p-2 rounded border border-emerald-200">
+                                        <span className="font-bold">Verified Remediation:</span>{' '}
+                                        {linkedAction.resolutionNote}
+                                        {linkedAction.resolvedBy && (
+                                          <span className="block text-[10px] text-emerald-800 font-mono mt-0.5">
+                                            Signed off by {linkedAction.resolvedBy} on{' '}
+                                            {linkedAction.resolvedAt
+                                              ? formatDateString(linkedAction.resolvedAt)
+                                              : 'Recently'}
+                                          </span>
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <div className="flex items-center justify-between gap-2 p-2 bg-red-50/70 border border-red-200 rounded">
+                                    <span className="text-[11px] text-red-900 font-medium">
+                                      Defect identified &bull; No active corrective action ticket linked yet
+                                    </span>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      icon={Plus}
+                                      onClick={() => handleOpenCreateActionForItem(selectedInspection, item)}
+                                      className="text-xs bg-white"
+                                    >
+                                      Create Action
+                                    </Button>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Status Badge */}
+                          <div className="flex-shrink-0">
+                            <Badge
+                              variant={
+                                item.status === 'pass'
+                                  ? 'success'
+                                  : item.status === 'needs_attention'
+                                  ? 'critical'
+                                  : 'warning'
+                              }
+                              size="sm"
+                            >
+                              {item.status === 'pass'
+                                ? 'PASS'
                                 : item.status === 'needs_attention'
-                                ? 'critical'
-                                : 'default'
-                            }
-                            size="sm"
-                          >
-                            {item.status === 'pass'
-                              ? 'PASS'
-                              : item.status === 'needs_attention'
-                              ? 'ATTENTION'
-                              : 'NOT CHECKED'}
-                          </Badge>
+                                ? 'ATTENTION'
+                                : 'NOT CHECKED'}
+                            </Badge>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })
+                )}
               </div>
             </div>
 
@@ -1174,40 +1500,61 @@ export const InspectionsPage: React.FC = () => {
               />
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <Select
-                label="Priority Level"
-                value={actionPriority}
-                onChange={(e) => setActionPriority(e.target.value as PriorityLevel)}
-              >
-                <option value="critical">Critical (Immediate Hazard)</option>
-                <option value="high">High (Address within 72h)</option>
-                <option value="medium">Medium (Scheduled servicing)</option>
-                <option value="low">Low (Cosmetic/housekeeping)</option>
-              </Select>
-
-              <Select
-                label="Assign Responsibility"
-                value={actionStaffId}
-                onChange={(e) => setActionStaffId(e.target.value)}
-              >
-                {staff.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name} ({s.emergencyRole})
-                  </option>
-                ))}
-              </Select>
+            {/* Immediate ticket toggle */}
+            <div className="p-3 bg-brand-graphite-50 rounded border border-brand-border">
+              <label className="flex items-center gap-2 text-xs font-semibold text-brand-graphite-800 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={createTicketImmediately}
+                  onChange={(e) => setCreateTicketImmediately(e.target.checked)}
+                  className="rounded text-brand-red focus:ring-brand-red w-4 h-4"
+                />
+                <span>Generate tracked Corrective Action ticket immediately</span>
+              </label>
+              <p className="text-[11px] text-brand-graphite-500 mt-1 pl-6">
+                {createTicketImmediately
+                  ? 'Assigns this defect to facilities personnel and tracks remediation through to closure.'
+                  : 'Records this defect in the audit register. A ticket can be assigned later.'}
+              </p>
             </div>
 
-            <Input
-              label="Target Due Date"
-              type="date"
-              value={actionDueDate}
-              onChange={(e) => setActionDueDate(e.target.value)}
-              required
-            >
-              <Calendar className="w-4 h-4 text-brand-graphite-400" />
-            </Input>
+            {createTicketImmediately && (
+              <>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <Select
+                    label="Priority Level"
+                    value={actionPriority}
+                    onChange={(e) => setActionPriority(e.target.value as PriorityLevel)}
+                  >
+                    <option value="critical">Critical (Immediate Hazard)</option>
+                    <option value="high">High (Address within 72h)</option>
+                    <option value="medium">Medium (Scheduled servicing)</option>
+                    <option value="low">Low (Cosmetic/housekeeping)</option>
+                  </Select>
+
+                  <Select
+                    label="Assign Responsibility"
+                    value={actionStaffId}
+                    onChange={(e) => setActionStaffId(e.target.value)}
+                  >
+                    {staff.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name} ({s.emergencyRole})
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+
+                <Input
+                  label="Target Due Date"
+                  type="date"
+                  value={actionDueDate}
+                  onChange={(e) => setActionDueDate(e.target.value)}
+                  icon={Calendar}
+                  required
+                />
+              </>
+            )}
 
             <div className="pt-3 border-t border-brand-border flex justify-end gap-2">
               <Button
@@ -1219,7 +1566,7 @@ export const InspectionsPage: React.FC = () => {
                 Cancel
               </Button>
               <Button type="submit" variant="primary" size="sm" icon={ShieldCheck}>
-                Assign & Create Action
+                {createTicketImmediately ? 'Assign & Create Action' : 'Save Deficiency Finding'}
               </Button>
             </div>
           </form>
