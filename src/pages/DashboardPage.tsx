@@ -42,10 +42,9 @@ export const DashboardPage: React.FC = () => {
   const navigate = useNavigate();
   const [showFormulaModal, setShowFormulaModal] = useState(false);
 
-  const pendingInspections = inspections.filter(
-    (i) => i.status === 'needs_attention' || i.status === 'pending'
+  const openIssues = issues.filter(
+    (i) => i.status === 'open' || i.status === 'in_progress'
   );
-  const openIssues = issues.filter((i) => i.status !== 'resolved');
   const recentDrills = drills.slice(0, 3);
   const completedDrills = drills.filter((d) => d.status === 'completed');
 
@@ -412,26 +411,54 @@ export const DashboardPage: React.FC = () => {
             </div>
 
             <div className="divide-y divide-brand-border">
-              {inspections.slice(0, 3).map((insp) => (
-                <div key={insp.id} className="p-4 hover:bg-brand-graphite-50/50 transition-colors">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs font-bold text-brand-graphite-900">
-                      {insp.buildingName}
-                    </span>
-                    <Badge
-                      variant={insp.status === 'passed' ? 'success' : 'warning'}
-                      size="sm"
-                    >
-                      {insp.status === 'passed' ? 'PASSED (100%)' : `NEEDS ATTENTION (${insp.score}%)`}
-                    </Badge>
+              {inspections.slice(0, 3).map((insp) => {
+                const unchk = insp.items.filter((i) => i.status === 'not_checked').length;
+                const isIncomplete = unchk > 0 || insp.status === 'pending';
+                const defects = insp.items.filter((i) => i.status === 'needs_attention');
+                const allResolved =
+                  defects.length > 0 &&
+                  defects.every((item) => {
+                    const linked = issues.find(
+                      (iss) =>
+                        (item.linkedIssueId && iss.id === item.linkedIssueId) ||
+                        (iss.sourceId === insp.id &&
+                          (iss.checklistItemId === item.id || iss.title.includes(item.label)))
+                    );
+                    return linked && (linked.status === 'resolved' || linked.status === 'verified');
+                  });
+
+                return (
+                  <div key={insp.id} className="p-4 hover:bg-brand-graphite-50/50 transition-colors">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs font-bold text-brand-graphite-900">
+                        {insp.buildingName}
+                      </span>
+                      {isIncomplete ? (
+                        <Badge variant="warning" size="sm">
+                          INCOMPLETE ({unchk} PENDING)
+                        </Badge>
+                      ) : defects.length > 0 && allResolved ? (
+                        <Badge variant="success" size="sm" className="bg-emerald-100 text-emerald-800 border-emerald-300">
+                          ALL REMEDIATED (100%)
+                        </Badge>
+                      ) : insp.status === 'passed' ? (
+                        <Badge variant="success" size="sm">
+                          PASSED ({insp.score}%)
+                        </Badge>
+                      ) : (
+                        <Badge variant="critical" size="sm">
+                          NEEDS ATTENTION ({insp.score}%)
+                        </Badge>
+                      )}
+                    </div>
+                    <p className="text-xs text-brand-graphite-500 mb-1.5">{insp.notes}</p>
+                    <div className="flex items-center justify-between text-[11px] text-brand-graphite-400">
+                      <span>Inspector: {insp.inspectorName}</span>
+                      <span>{formatDateString(insp.date)}</span>
+                    </div>
                   </div>
-                  <p className="text-xs text-brand-graphite-500 mb-1.5">{insp.notes}</p>
-                  <div className="flex items-center justify-between text-[11px] text-brand-graphite-400">
-                    <span>Inspector: {insp.inspectorName}</span>
-                    <span>{formatDateString(insp.date)}</span>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </div>

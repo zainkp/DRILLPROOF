@@ -1332,9 +1332,22 @@ export const InspectionsPage: React.FC = () => {
                           {selectedInspection.floorLabel || 'All Floors / Full Facility'}
                         </span>
                         {modalIsIncomplete ? (
-                          <Badge variant="warning" size="sm">
-                            INCOMPLETE &bull; PENDING VERIFICATION ({modalNotCheckedCount} UNCHECKED)
-                          </Badge>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <Badge variant="warning" size="sm">
+                              INCOMPLETE &bull; PENDING VERIFICATION ({modalNotCheckedCount} UNCHECKED)
+                            </Badge>
+                            {modalAttentionCount > 0 && (
+                              modalAllResolved ? (
+                                <Badge variant="success" size="sm" className="bg-emerald-100 text-emerald-800 border-emerald-300">
+                                  DEFICIENCIES REMEDIATED
+                                </Badge>
+                              ) : (
+                                <Badge variant="critical" size="sm">
+                                  {modalActiveDefects.length} ACTIVE DEFECT{modalActiveDefects.length !== 1 ? 'S' : ''}
+                                </Badge>
+                              )
+                            )}
+                          </div>
                         ) : modalAttentionCount > 0 ? (
                           modalAllResolved ? (
                             <div className="flex flex-wrap items-center gap-1.5">
@@ -1433,7 +1446,7 @@ export const InspectionsPage: React.FC = () => {
                     </div>
                   )}
 
-                  {!modalIsIncomplete && modalAttentionCount > 0 && modalAllResolved && (
+                  {modalAttentionCount > 0 && modalAllResolved && (
                     <div className="p-3 bg-emerald-50 border border-emerald-200 rounded flex items-center gap-2 text-xs text-emerald-950 animate-fadeIn">
                       <ShieldCheck className="w-4 h-4 text-emerald-700 flex-shrink-0" />
                       <span>
@@ -1470,15 +1483,21 @@ export const InspectionsPage: React.FC = () => {
                         </>
                       )}
                     </>
-                  ) : (
+                  ) : getInspectionAttentionCount(selectedInspection) > 0 ? (
                     <span className="text-red-600 font-bold">
                       {getInspectionAttentionCount(selectedInspection)} Attention
                     </span>
+                  ) : (
+                    <span>0 Attention</span>
                   )}{' '}
                   &bull;{' '}
-                  <span className="text-amber-600 font-bold">
-                    {getInspectionPendingCount(selectedInspection)} Unchecked
-                  </span>
+                  {getInspectionPendingCount(selectedInspection) > 0 ? (
+                    <span className="text-amber-600 font-bold">
+                      {getInspectionPendingCount(selectedInspection)} Unchecked
+                    </span>
+                  ) : (
+                    <span>0 Unchecked</span>
+                  )}
                 </div>
               </div>
 
