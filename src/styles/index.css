@@ -1,0 +1,81 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --brand-red: #E51C23;
+    --brand-orange: #F47721;
+    --brand-graphite: #202124;
+    --brand-canvas: #F7F6F4;
+    --brand-border: #E2E4E8;
+  }
+
+  body {
+    background-color: #F7F6F4;
+    color: #202124;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+}
+
+/* Subtle architectural and technical grid */
+.bg-tech-grid {
+  background-size: 24px 24px;
+  background-image: 
+    linear-gradient(to right, rgba(32, 33, 36, 0.04) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(32, 33, 36, 0.04) 1px, transparent 1px);
+}
+
+.bg-tech-grid-dark {
+  background-size: 24px 24px;
+  background-image: 
+    linear-gradient(to right, rgba(255, 255, 255, 0.05) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+}
+
+.bg-dots-pattern {
+  background-image: radial-gradient(rgba(32, 33, 36, 0.08) 1px, transparent 1px);
+  background-size: 16px 16px;
+}
+
+/* Technical corner markers for cards & panels */
+.corner-border-tl {
+  position: relative;
+}
+.corner-border-tl::before {
+  content: '';
+  position: absolute;
+  top: -1px;
+  left: -1px;
+  width: 8px;
+  height: 8px;
+  border-top: 2px solid #E51C23;
+  border-left: 2px solid #E51C23;
+}
+
+/* Floor-plan inspired hatched lines */
+.hatch-pattern {
+  background: repeating-linear-gradient(
+    45deg,
+    transparent,
+    transparent 8px,
+    rgba(32, 33, 36, 0.03) 8px,
+    rgba(32, 33, 36, 0.03) 16px
+  );
+}
+
+/* Custom Scrollbar for technical panels */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #F1F2F4;
+}
+::-webkit-scrollbar-thumb {
+  background: #C4C7CE;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #9AA0A6;
+}
