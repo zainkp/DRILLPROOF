@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useData } from '../hooks/useData';
 import { PageHeader } from '../components/common/PageHeader';
@@ -21,12 +21,22 @@ import {
   ShieldCheck,
   Building2,
   Calendar,
+  Printer,
+  FileCheck,
+  TrendingDown,
+  TrendingUp,
+  AlertOctagon,
+  Award,
+  Layers,
+  FileText,
+  UserCheck,
 } from 'lucide-react';
 import {
   formatDateString,
   formatSecondsToTime,
   formatHazardName,
   formatPriority,
+  formatDrillStatus,
 } from '../utils/formatters';
 import { PriorityLevel } from '../types';
 
@@ -38,6 +48,7 @@ export const DrillDetailPage: React.FC = () => {
     updateDrillCheckin,
     addDrillObservation,
     createSafetyIssue,
+    issues,
     user,
   } = useData();
 
@@ -51,13 +62,23 @@ export const DrillDetailPage: React.FC = () => {
 
   // New Observation Modal state
   const [observationModalOpen, setObservationModalOpen] = useState(false);
-  const [obsLocation, setObsLocation] = useState('Level 1 West Stairwell');
+  const [obsLocation, setObsLocation] = useState(
+    drill?.floorCheckins[0]?.floorLabel ? `${drill.floorCheckins[0].floorLabel} Egress Corridor` : 'Level 1 West Stairwell'
+  );
   const [obsText, setObsText] = useState('');
   const [obsSeverity, setObsSeverity] = useState<PriorityLevel>('high');
 
   // Convert to Action feedback message
   const [convertedNotice, setConvertedNotice] = useState<string | null>(null);
 
+  // Sync elapsed seconds if drill updates externally
+  useEffect(() => {
+    if (drill.durationSeconds && !timerRunning && elapsedSeconds === 0) {
+      setElapsedSeconds(drill.durationSeconds);
+    }
+  }, [drill.durationSeconds, timerRunning]);
+
+  // Live Timer ticker
   useEffect(() => {
     let interval: NodeJS.Timeout | null = null;
     if (timerRunning) {
@@ -70,11 +91,22 @@ export const DrillDetailPage: React.FC = () => {
     };
   }, [timerRunning]);
 
+  if (!drill) {
+    return (
+      <div className="p-8 text-center bg-white border border-brand-border rounded">
+        <p className="font-semibold text-brand-graphite-800">Drill exercise not found.</p>
+        <Link to="/drills" className="text-brand-red font-mono text-xs hover:underline mt-2 block">
+          &larr; Back to Mock Drills
+        </Link>
+      </div>
+    );
+  }
+
   const handleStartTimer = () => {
     setTimerRunning(true);
     updateDrill(drill.id, {
       status: 'in_progress',
-      startedAt: new Date().toISOString(),
+      startedAt: drill.startedAt || new Date().toISOString(),
     });
   };
 
@@ -85,27 +117,84 @@ export const DrillDetailPage: React.FC = () => {
     });
   };
 
-  const handleCompleteDrill = () => {
+  const handleResetTimer = () => {
     setTimerRunning(false);
+    setElapsedSeconds(0);
     updateDrill(drill.id, {
-      status: 'completed',
-      durationSeconds: elapsedSeconds,
-      completedAt: new Date().toISOString(),
+      durationSeconds: 0,
+      status: 'planned',
     });
   };
 
-  const handleFloorClearToggle = (checkinId: string, currentStatus: string) => {
-    const isClearing = currentStatus !== 'cleared';
+  const handleCompleteDrill = () => {
+    setTimerRunning(false);
+    const finalSeconds = elapsedSeconds > 0 ? elapsedSeconds : drill.targetDurationSeconds;
+    
+    // Auto-tally all accounted if needed
+    const updatedCheckins = drill.floorCheckins.map((chk) => ({
+      ...chk,
+      status: 'cleared' as const,
+      accountedCount: chk.accountedCount > 0 ? chk.accountedCount : chk.expectedCount,
+      clearedAt: chk.clearedAt || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    }));
+
+    const totalAccounted = updatedCheckins.reduce((s, c) => s + c.accountedCount, 0);
+
+    updateDrill(drill.id, {
+      status: 'completed',
+      durationSeconds: finalSeconds,
+      completedAt: new Date().toISOString(),
+      participantsAccountedFor: totalAccounted,
+      floorCheckins: updatedCheckins,
+    });
+  };
+
+  // Toggle floor sweep clearance status
+  const handleFloorCycle = (checkinId: string, currentStatus: string) => {
     const checkin = drill.floorCheckins.find((c) => c.id === checkinId);
     if (!checkin) return;
 
+    let nextStatus: 'pending' | 'in_progress' | 'cleared';
+    let nextAccounted = checkin.accountedCount;
+    let nextClearedAt = checkin.clearedAt;
+
+    if (currentStatus === 'pending') {
+      nextStatus = 'in_progress';
+    } else if (currentStatus === 'in_progress') {
+      nextStatus = 'cleared';
+      nextAccounted = checkin.expectedCount;
+      nextClearedAt = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } else {
+      nextStatus = 'pending';
+      nextAccounted = 0;
+      nextClearedAt = undefined;
+    }
+
     updateDrillCheckin(drill.id, checkinId, {
-      status: isClearing ? 'cleared' : 'in_progress',
-      clearedAt: isClearing ? new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : undefined,
-      accountedCount: isClearing ? checkin.expectedCount : 0,
+      status: nextStatus,
+      accountedCount: nextAccounted,
+      clearedAt: nextClearedAt,
     });
+
+    // Recompute total accounted
+    const updatedCheckins = drill.floorCheckins.map((c) =>
+      c.id === checkinId ? { ...c, status: nextStatus, accountedCount: nextAccounted } : c
+    );
+    const newTotal = updatedCheckins.reduce((sum, c) => sum + c.accountedCount, 0);
+    updateDrill(drill.id, { participantsAccountedFor: newTotal });
   };
 
+  // Adjust total accountability count
+  const handleAdjustAccountability = (delta: number) => {
+    const newCount = Math.max(0, Math.min(drill.participantsExpected, drill.participantsAccountedFor + delta));
+    updateDrill(drill.id, { participantsAccountedFor: newCount });
+  };
+
+  const handleSetAllAccounted = () => {
+    updateDrill(drill.id, { participantsAccountedFor: drill.participantsExpected });
+  };
+
+  // Add observation
   const handleAddObservation = (e: React.FormEvent) => {
     e.preventDefault();
     if (!obsText.trim()) return;
@@ -114,7 +203,7 @@ export const DrillDetailPage: React.FC = () => {
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       observerName: user?.name || 'Marcus Vance',
       floorOrZone: obsLocation,
-      observation: obsText,
+      observation: obsText.trim(),
       severity: obsSeverity,
     });
 
@@ -122,7 +211,13 @@ export const DrillDetailPage: React.FC = () => {
     setObservationModalOpen(false);
   };
 
-  const handleConvertToCorrectiveAction = (obsId: string, observationText: string, location: string, severity: PriorityLevel) => {
+  // Convert observation to corrective action
+  const handleConvertToCorrectiveAction = (
+    obsId: string,
+    observationText: string,
+    location: string,
+    severity: PriorityLevel
+  ) => {
     const issue = createSafetyIssue({
       institutionId: drill.institutionId,
       buildingId: drill.buildingId,
@@ -130,7 +225,7 @@ export const DrillDetailPage: React.FC = () => {
       sourceType: 'drill',
       sourceId: drill.id,
       title: `${location}: ${observationText.slice(0, 60)}...`,
-      description: `Discovered during drill ${drill.code} (${drill.title}):\n"${observationText}"\nZone: ${location}`,
+      description: `Deficiency identified during emergency drill ${drill.code} (${drill.title}):\n"${observationText}"\nZone: ${location}`,
       priority: severity,
       assignedToName: 'Facilities Maintenance Supervisor',
       assignedToRole: 'Facilities Maintenance Supervisor',
@@ -138,7 +233,7 @@ export const DrillDetailPage: React.FC = () => {
       status: 'open',
     });
 
-    // mark observation as converted
+    // Mark observation as converted
     const updatedObs = drill.observations.map((obs) => {
       if (obs.id === obsId) {
         return { ...obs, convertedToIssueId: issue.id };
@@ -148,21 +243,58 @@ export const DrillDetailPage: React.FC = () => {
     updateDrill(drill.id, { observations: updatedObs });
 
     setConvertedNotice(`Corrective Action #${issue.code} created and assigned to Facilities.`);
-    setTimeout(() => setConvertedNotice(null), 5000);
+    setTimeout(() => setConvertedNotice(null), 6000);
   };
 
+  // Accountability & Clearance metrics
   const totalAccounted = drill.participantsAccountedFor;
   const totalExpected = drill.participantsExpected;
+  const missingCount = Math.max(0, totalExpected - totalAccounted);
   const accountabilityRate =
     totalExpected > 0 ? Math.round((totalAccounted / totalExpected) * 100) : 0;
 
+  const totalFloors = drill.floorCheckins.length;
+  const clearedFloors = drill.floorCheckins.filter((c) => c.status === 'cleared').length;
+  const floorClearanceRate = totalFloors > 0 ? Math.round((clearedFloors / totalFloors) * 100) : 0;
+
+  // Benchmark pacing
+  const targetSeconds = drill.targetDurationSeconds;
+  const paceVariance = targetSeconds - elapsedSeconds;
+  const isOnPace = paceVariance >= 0;
+
+  // After Action Performance Rating
+  const isCompleted = drill.status === 'completed';
+  const performanceRating = useMemo(() => {
+    if (!isCompleted) return null;
+    const timeRatio = (drill.durationSeconds || elapsedSeconds) / targetSeconds;
+    if (timeRatio <= 1.0 && accountabilityRate >= 95 && floorClearanceRate === 100) {
+      return {
+        label: 'EXCELLENT — MEETS REGULATORY BENCHMARK',
+        color: 'text-emerald-800 bg-emerald-50 border-emerald-300',
+        summary: 'Evacuation executed well within target benchmark. Headcount fully accounted for and all muster zones reported clear.',
+      };
+    } else if (timeRatio <= 1.25 && accountabilityRate >= 80) {
+      return {
+        label: 'ACCEPTABLE WITH MINOR PROCEDURAL GAPS',
+        color: 'text-amber-800 bg-amber-50 border-amber-300',
+        summary: 'Target benchmark exceeded slightly or minor delays recorded in stairwell surge. Remediation items logged.',
+      };
+    } else {
+      return {
+        label: 'DEFICIENT — RETEST & SAFETY REMEDIATION REQUIRED',
+        color: 'text-red-800 bg-red-50 border-red-300',
+        summary: 'Significant egress bottlenecks, unaccounted occupants, or delayed floor sweeps recorded. Corrective actions required before next audit.',
+      };
+    }
+  }, [isCompleted, drill.durationSeconds, elapsedSeconds, targetSeconds, accountabilityRate, floorClearanceRate]);
+
   return (
-    <div>
+    <div className="space-y-6">
       <PageHeader
         title={drill.title}
         description={`Exercise Code: ${drill.code} &bull; Facility: ${drill.buildingName} &bull; Hazard: ${formatHazardName(drill.hazardType)}`}
         breadcrumbs={[
-          { label: 'Drills', path: '/drills' },
+          { label: 'Mock Drills', path: '/drills' },
           { label: drill.code },
         ]}
         badge={
@@ -180,8 +312,8 @@ export const DrillDetailPage: React.FC = () => {
           </Badge>
         }
         actions={
-          <div className="flex items-center gap-2">
-            {drill.status !== 'completed' && (
+          <div className="flex items-center gap-2 print:hidden">
+            {drill.status !== 'completed' ? (
               <Button
                 size="sm"
                 variant="primary"
@@ -189,6 +321,15 @@ export const DrillDetailPage: React.FC = () => {
                 icon={CheckCircle2}
               >
                 End & Complete Exercise
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="outline"
+                icon={Printer}
+                onClick={() => window.print()}
+              >
+                Print AAR Report
               </Button>
             )}
             <Link to="/drills">
@@ -200,45 +341,81 @@ export const DrillDetailPage: React.FC = () => {
         }
       />
 
-      {/* Converted Action Notice Banner */}
+      {/* Converted Action Notification Banner */}
       {convertedNotice && (
-        <div className="mb-6 p-3 bg-emerald-50 border border-emerald-300 text-emerald-800 rounded text-xs flex items-center justify-between animate-fade-in">
+        <div className="p-3.5 bg-emerald-50 border border-emerald-300 text-emerald-800 rounded text-xs flex items-center justify-between shadow-xs animate-fade-in">
           <div className="flex items-center gap-2">
             <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" />
-            <span>{convertedNotice}</span>
+            <span className="font-semibold">{convertedNotice}</span>
           </div>
-          <Link to="/issues" className="font-bold underline text-emerald-900">
+          <Link to="/issues" className="font-bold underline text-emerald-900 font-mono">
             View in Corrective Actions &rarr;
           </Link>
         </div>
       )}
 
-      {/* Main Execution Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
-        {/* Active Timer Card */}
+      {/* 1. Interactive Command Console: Stopwatch, Accountability & Overview */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Live Evacuation Stopwatch */}
         <div className="bg-white border border-brand-border rounded p-6 shadow-xs flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between mb-2">
               <span className="text-xs font-bold uppercase tracking-wider text-brand-graphite-500 font-mono">
                 Evacuation Stopwatch
               </span>
-              <span className="text-xs text-brand-graphite-500 font-mono">
-                Target: {formatSecondsToTime(drill.targetDurationSeconds)}
+              <span className="text-xs font-mono text-brand-graphite-600">
+                Target: {formatSecondsToTime(targetSeconds)}
               </span>
             </div>
 
-            <div className="my-4 text-center py-4 bg-brand-graphite-900 text-white rounded border border-brand-graphite-800 font-mono">
+            {/* Big Stopwatch Display */}
+            <div className="my-4 text-center py-5 bg-brand-graphite-900 text-white rounded border border-brand-graphite-800 font-mono shadow-inner">
               <span className="text-4xl sm:text-5xl font-bold tracking-tight">
                 {formatSecondsToTime(elapsedSeconds)}
               </span>
-              <span className="block text-[10px] text-brand-graphite-400 uppercase tracking-widest mt-1">
-                {timerRunning ? 'Timer Active &bull; Clock Ticking' : 'Simulation Paused / Finished'}
+              <div className="mt-2 flex items-center justify-center gap-2 text-[10px] font-mono uppercase tracking-wider">
+                {timerRunning ? (
+                  <span className="text-emerald-400 flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                    Timer Active &bull; Clock Ticking
+                  </span>
+                ) : drill.status === 'completed' ? (
+                  <span className="text-brand-graphite-300">
+                    Drill Completed &bull; Final Time Recorded
+                  </span>
+                ) : (
+                  <span className="text-amber-400">
+                    Simulation Paused / Standby
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Pacing Indicator */}
+            <div className="mb-4 text-xs font-mono flex items-center justify-between p-2 rounded bg-brand-graphite-50 border border-brand-border">
+              <span className="text-brand-graphite-500">Benchmark Comparison:</span>
+              <span
+                className={`font-bold flex items-center gap-1 ${
+                  isOnPace ? 'text-emerald-700' : 'text-red-700'
+                }`}
+              >
+                {isOnPace ? (
+                  <>
+                    <TrendingDown className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>+{paceVariance}s Cushion (On Pace)</span>
+                  </>
+                ) : (
+                  <>
+                    <TrendingUp className="w-3.5 h-3.5 text-red-600" />
+                    <span>+{Math.abs(paceVariance)}s Delay Past Target</span>
+                  </>
+                )}
               </span>
             </div>
           </div>
 
-          {/* Timer Controls */}
-          <div className="flex items-center gap-2">
+          {/* Stopwatch Controls */}
+          <div className="flex items-center gap-2 print:hidden">
             {!timerRunning ? (
               <Button
                 variant="primary"
@@ -264,10 +441,7 @@ export const DrillDetailPage: React.FC = () => {
               variant="outline"
               size="sm"
               icon={RotateCcw}
-              onClick={() => {
-                setTimerRunning(false);
-                setElapsedSeconds(0);
-              }}
+              onClick={handleResetTimer}
               title="Reset Timer"
             >
               Reset
@@ -275,7 +449,7 @@ export const DrillDetailPage: React.FC = () => {
           </div>
         </div>
 
-        {/* Accountability Meter */}
+        {/* Participant Accountability Tracker */}
         <div className="bg-white border border-brand-border rounded p-6 shadow-xs flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between mb-2">
@@ -285,7 +459,7 @@ export const DrillDetailPage: React.FC = () => {
               <Users2 className="w-4 h-4 text-brand-graphite-500" />
             </div>
 
-            <div className="my-4">
+            <div className="my-3">
               <div className="flex items-baseline justify-between mb-1">
                 <span className="text-3xl font-bold font-mono text-brand-graphite-900">
                   {totalAccounted}{' '}
@@ -293,34 +467,82 @@ export const DrillDetailPage: React.FC = () => {
                     / {totalExpected}
                   </span>
                 </span>
-                <span className="font-mono font-bold text-sm text-emerald-700">
-                  {accountabilityRate}%
+                <span
+                  className={`font-mono font-bold text-sm ${
+                    accountabilityRate >= 95
+                      ? 'text-emerald-700'
+                      : accountabilityRate >= 75
+                      ? 'text-amber-700'
+                      : 'text-red-700'
+                  }`}
+                >
+                  {accountabilityRate}% Accounted
                 </span>
               </div>
 
               {/* Progress bar */}
               <div className="w-full h-3 bg-brand-graphite-100 rounded-full overflow-hidden border border-brand-border">
                 <div
-                  className="h-full bg-emerald-600 transition-all duration-300"
+                  className={`h-full transition-all duration-300 ${
+                    accountabilityRate >= 95
+                      ? 'bg-emerald-600'
+                      : accountabilityRate >= 75
+                      ? 'bg-amber-500'
+                      : 'bg-red-600'
+                  }`}
                   style={{ width: `${Math.min(100, accountabilityRate)}%` }}
                 />
               </div>
             </div>
+
+            {/* Quick Accountability Sub-counters */}
+            <div className="grid grid-cols-2 gap-2 my-3 text-xs font-mono">
+              <div className="p-2 rounded bg-emerald-50 border border-emerald-200">
+                <span className="text-[10px] text-emerald-800 uppercase block">Accounted</span>
+                <strong className="text-emerald-950 text-sm">{totalAccounted}</strong>
+              </div>
+              <div className="p-2 rounded bg-red-50 border border-red-200">
+                <span className="text-[10px] text-red-800 uppercase block">Unaccounted / Missing</span>
+                <strong className="text-red-950 text-sm">{missingCount}</strong>
+              </div>
+            </div>
           </div>
 
-          <div className="p-3 bg-brand-graphite-50 rounded text-xs text-brand-graphite-600">
-            <span>Floor sweeps logged: </span>
-            <strong className="text-brand-graphite-900">
-              {drill.floorCheckins.filter((c) => c.status === 'cleared').length} of {drill.floorCheckins.length} floors cleared
-            </strong>
+          {/* Quick Headcount Increment / Adjustment Controls */}
+          <div className="flex items-center gap-1.5 pt-2 border-t border-brand-border print:hidden">
+            <button
+              onClick={() => handleAdjustAccountability(10)}
+              className="flex-1 py-1 px-2 text-xs font-mono font-semibold rounded bg-brand-graphite-100 hover:bg-brand-graphite-200 text-brand-graphite-800 transition-colors"
+            >
+              +10
+            </button>
+            <button
+              onClick={() => handleAdjustAccountability(50)}
+              className="flex-1 py-1 px-2 text-xs font-mono font-semibold rounded bg-brand-graphite-100 hover:bg-brand-graphite-200 text-brand-graphite-800 transition-colors"
+            >
+              +50
+            </button>
+            <button
+              onClick={handleSetAllAccounted}
+              className="flex-1 py-1 px-2 text-xs font-mono font-semibold rounded bg-emerald-100 hover:bg-emerald-200 text-emerald-900 transition-colors"
+            >
+              All (100%)
+            </button>
+            <button
+              onClick={() => handleAdjustAccountability(-10)}
+              className="py-1 px-2 text-xs font-mono rounded bg-brand-graphite-100 hover:bg-brand-graphite-200 text-brand-graphite-600 transition-colors"
+              title="Decrement 10"
+            >
+              -10
+            </button>
           </div>
         </div>
 
-        {/* Lead Coordinator Profile */}
+        {/* Drill Coordination & Facility Profile */}
         <div className="bg-white border border-brand-border rounded p-6 shadow-xs flex flex-col justify-between">
           <div>
             <span className="text-xs font-bold uppercase tracking-wider text-brand-graphite-500 font-mono block mb-2">
-              Exercise Leadership & Safety Notice
+              Exercise Leadership & Facility Profile
             </span>
             <div className="space-y-2 text-xs">
               <div className="flex justify-between py-1 border-b border-brand-border">
@@ -329,32 +551,111 @@ export const DrillDetailPage: React.FC = () => {
               </div>
               <div className="flex justify-between py-1 border-b border-brand-border">
                 <span className="text-brand-graphite-500">Hazard Profile:</span>
-                <span className="font-semibold text-brand-graphite-900 capitalize">{drill.hazardType}</span>
+                <span className="font-semibold text-brand-graphite-900 capitalize font-mono">
+                  {formatHazardName(drill.hazardType)}
+                </span>
+              </div>
+              <div className="flex justify-between py-1 border-b border-brand-border">
+                <span className="text-brand-graphite-500">Target Facility:</span>
+                <span className="font-semibold text-brand-graphite-900">{drill.buildingName}</span>
               </div>
               <div className="flex justify-between py-1">
-                <span className="text-brand-graphite-500">Target Assembly:</span>
-                <span className="font-semibold text-brand-graphite-900">Assembly Point A</span>
+                <span className="text-brand-graphite-500">Floor Sweep Progress:</span>
+                <span className="font-semibold text-emerald-700 font-mono">
+                  {clearedFloors} of {totalFloors} floors cleared ({floorClearanceRate}%)
+                </span>
               </div>
             </div>
           </div>
 
-          <div className="p-2.5 bg-brand-graphite-100/60 rounded text-[11px] text-brand-graphite-500">
-            Manual sweep verification prototype. No biometric or RFID automated tracking.
+          <div className="p-2.5 bg-brand-graphite-50 rounded border border-brand-border text-[11px] text-brand-graphite-600 mt-3 leading-relaxed">
+            <span className="font-semibold block text-brand-graphite-900 mb-0.5">Scenario Instructions:</span>
+            {drill.scenarioNotes}
           </div>
         </div>
       </div>
 
-      {/* Floor Sweep Status Table */}
-      <div className="bg-white border border-brand-border rounded shadow-xs overflow-hidden mb-8">
-        <div className="p-4 border-b border-brand-border bg-brand-graphite-50/50 flex items-center justify-between">
+      {/* 2. After-Action Review (AAR) Report — Displayed when completed or finalized */}
+      {isCompleted && performanceRating && (
+        <div className="bg-white border-2 border-emerald-600 rounded p-6 shadow-xs space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-brand-border">
+            <div className="flex items-center gap-3">
+              <Award className="w-8 h-8 text-emerald-600 flex-shrink-0" />
+              <div>
+                <span className="text-[10px] uppercase font-bold text-brand-graphite-500 font-mono tracking-wider block">
+                  Official Post-Exercise Evaluation
+                </span>
+                <h3 className="text-lg font-bold text-brand-graphite-900">
+                  After-Action Review (AAR) Dossier
+                </h3>
+              </div>
+            </div>
+
+            <div className={`px-3 py-1.5 rounded border text-xs font-mono font-bold ${performanceRating.color}`}>
+              {performanceRating.label}
+            </div>
+          </div>
+
+          <p className="text-xs text-brand-graphite-700 leading-relaxed">
+            {performanceRating.summary}
+          </p>
+
+          {/* 4 Performance Indicators */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pt-2">
+            <div className="p-3 bg-brand-graphite-50 rounded border border-brand-border">
+              <span className="text-[10px] font-mono text-brand-graphite-500 uppercase block">Recorded Time</span>
+              <span className="text-lg font-bold font-mono text-brand-graphite-900">
+                {formatSecondsToTime(drill.durationSeconds || elapsedSeconds)}
+              </span>
+              <span className="text-[11px] text-brand-graphite-500 block">
+                Target: {formatSecondsToTime(targetSeconds)}
+              </span>
+            </div>
+
+            <div className="p-3 bg-brand-graphite-50 rounded border border-brand-border">
+              <span className="text-[10px] font-mono text-brand-graphite-500 uppercase block">Accountability</span>
+              <span className="text-lg font-bold font-mono text-brand-graphite-900">
+                {accountabilityRate}%
+              </span>
+              <span className="text-[11px] text-brand-graphite-500 block">
+                {totalAccounted} of {totalExpected} accounted
+              </span>
+            </div>
+
+            <div className="p-3 bg-brand-graphite-50 rounded border border-brand-border">
+              <span className="text-[10px] font-mono text-brand-graphite-500 uppercase block">Sweep Coverage</span>
+              <span className="text-lg font-bold font-mono text-brand-graphite-900">
+                {floorClearanceRate}%
+              </span>
+              <span className="text-[11px] text-brand-graphite-500 block">
+                {clearedFloors} of {totalFloors} floors cleared
+              </span>
+            </div>
+
+            <div className="p-3 bg-brand-graphite-50 rounded border border-brand-border">
+              <span className="text-[10px] font-mono text-brand-graphite-500 uppercase block">Logged Issues</span>
+              <span className="text-lg font-bold font-mono text-brand-red">
+                {drill.observations.length} Noted
+              </span>
+              <span className="text-[11px] text-brand-graphite-500 block">
+                {drill.observations.filter((o) => o.convertedToIssueId).length} tickets generated
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 3. Floor Sweep Status & Warden Muster Clearance Table */}
+      <div className="bg-white border border-brand-border rounded shadow-xs overflow-hidden">
+        <div className="p-4 border-b border-brand-border bg-brand-graphite-50/50 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <ShieldCheck className="w-4 h-4 text-emerald-600" />
             <h3 className="text-xs font-bold uppercase tracking-wider text-brand-graphite-900 font-mono">
-              Floor Sweep & Muster Clearance Check-ins
+              Floor Sweep & Muster Clearance Registry ({clearedFloors} of {totalFloors} cleared)
             </h3>
           </div>
-          <span className="text-xs text-brand-graphite-500">
-            Warden manual clearance controls
+          <span className="text-xs text-brand-graphite-500 font-mono">
+            Interactive warden clearance checkpoints
           </span>
         </div>
 
@@ -362,7 +663,7 @@ export const DrillDetailPage: React.FC = () => {
           {drill.floorCheckins.map((chk) => (
             <div
               key={chk.id}
-              className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 hover:bg-brand-graphite-50/40"
+              className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 hover:bg-brand-graphite-50/40 transition-colors"
             >
               <div className="flex-1">
                 <div className="flex items-center gap-2 mb-1">
@@ -370,21 +671,34 @@ export const DrillDetailPage: React.FC = () => {
                     {chk.floorLabel}
                   </span>
                   <Badge
-                    variant={chk.status === 'cleared' ? 'success' : 'default'}
+                    variant={
+                      chk.status === 'cleared'
+                        ? 'success'
+                        : chk.status === 'in_progress'
+                        ? 'warning'
+                        : 'default'
+                    }
                     size="sm"
                   >
-                    {chk.status.toUpperCase()}
+                    {chk.status === 'in_progress'
+                      ? 'SWEEP IN PROGRESS'
+                      : chk.status.toUpperCase()}
                   </Badge>
                 </div>
-                <div className="text-xs text-brand-graphite-500 flex items-center gap-3">
-                  <span>Warden: {chk.wardenName}</span>
+                <div className="text-xs text-brand-graphite-500 flex flex-wrap items-center gap-x-4 gap-y-1">
+                  <span className="flex items-center gap-1 text-brand-graphite-700">
+                    <UserCheck className="w-3.5 h-3.5 text-brand-graphite-400" />
+                    <span>Warden: <strong>{chk.wardenName}</strong></span>
+                  </span>
                   {chk.clearedAt && (
-                    <span className="font-mono text-emerald-700">
+                    <span className="font-mono text-emerald-700 font-semibold">
                       Cleared at {chk.clearedAt}
                     </span>
                   )}
                   {chk.notes && (
-                    <span className="text-amber-800 italic">"{chk.notes}"</span>
+                    <span className="text-amber-800 italic bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
+                      "{chk.notes}"
+                    </span>
                   )}
                 </div>
               </div>
@@ -392,7 +706,7 @@ export const DrillDetailPage: React.FC = () => {
               <div className="flex items-center gap-3 flex-shrink-0">
                 <div className="text-right">
                   <span className="text-[10px] uppercase font-bold text-brand-graphite-400 block font-mono">
-                    Accounted
+                    Floor Muster
                   </span>
                   <span className="font-mono font-bold text-xs text-brand-graphite-900">
                     {chk.accountedCount} / {chk.expectedCount}
@@ -401,10 +715,20 @@ export const DrillDetailPage: React.FC = () => {
 
                 <Button
                   size="sm"
-                  variant={chk.status === 'cleared' ? 'outline' : 'primary'}
-                  onClick={() => handleFloorClearToggle(chk.id, chk.status)}
+                  variant={
+                    chk.status === 'cleared'
+                      ? 'outline'
+                      : chk.status === 'in_progress'
+                      ? 'primary'
+                      : 'outline'
+                  }
+                  onClick={() => handleFloorCycle(chk.id, chk.status)}
                 >
-                  {chk.status === 'cleared' ? 'Mark In Progress' : 'Confirm Floor Cleared'}
+                  {chk.status === 'pending'
+                    ? 'Start Sweep'
+                    : chk.status === 'in_progress'
+                    ? 'Confirm Cleared'
+                    : 'Reopen Sweep'}
                 </Button>
               </div>
             </div>
@@ -412,15 +736,15 @@ export const DrillDetailPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Observations & Corrective Actions Loop */}
+      {/* 4. Drill Observations & Corrective Actions Loop */}
       <div className="bg-white border border-brand-border rounded shadow-xs overflow-hidden">
-        <div className="p-4 border-b border-brand-border bg-brand-graphite-50/50 flex items-center justify-between">
+        <div className="p-4 border-b border-brand-border bg-brand-graphite-50/50 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
             <h3 className="text-xs font-bold uppercase tracking-wider text-brand-graphite-900 font-mono">
-              Drill Observations & Corrective Action Closure
+              Drill Observations & Corrective Action Closure Loop
             </h3>
             <p className="text-xs text-brand-graphite-500">
-              Convert observed bottlenecks or obstructed routes directly into assigned facility tickets.
+              Convert observed bottlenecks, locked exits, or delayed evacuations directly into tracked remediation tickets.
             </p>
           </div>
 
@@ -436,18 +760,25 @@ export const DrillDetailPage: React.FC = () => {
 
         <div className="divide-y divide-brand-border">
           {drill.observations.length === 0 ? (
-            <div className="p-6 text-center text-xs text-brand-graphite-500">
-              No observations recorded yet. Click "Add Observation" to log drill bottlenecks.
+            <div className="p-8 text-center text-xs text-brand-graphite-500">
+              <FileCheck className="w-8 h-8 text-brand-graphite-300 mx-auto mb-2" />
+              <p className="font-semibold text-brand-graphite-700">No operational bottlenecks observed yet.</p>
+              <p className="text-[11px] text-brand-graphite-500 mt-1">
+                Click &quot;Add Observation&quot; to log stairwell congestion, alarm volume issues, or egress delays.
+              </p>
             </div>
           ) : (
             drill.observations.map((obs) => {
               const p = formatPriority(obs.severity);
               const isConverted = !!obs.convertedToIssueId;
+              const linkedIssue = isConverted
+                ? issues.find((i) => i.id === obs.convertedToIssueId)
+                : null;
 
               return (
                 <div key={obs.id} className="p-4 sm:p-5 flex flex-col sm:flex-row sm:items-start justify-between gap-4">
                   <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-1">
+                    <div className="flex items-center gap-2 mb-1.5">
                       <span className="font-bold text-xs text-brand-graphite-900">
                         {obs.floorOrZone}
                       </span>
@@ -459,15 +790,17 @@ export const DrillDetailPage: React.FC = () => {
                       </span>
                     </div>
 
-                    <p className="text-xs text-brand-graphite-700 leading-relaxed mb-2">
+                    <p className="text-xs text-brand-graphite-700 leading-relaxed mb-2.5">
                       {obs.observation}
                     </p>
 
                     {isConverted && (
-                      <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                        <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                        Converted into assigned Corrective Action ticket
-                      </span>
+                      <div className="inline-flex items-center gap-2 text-[11px] font-semibold text-emerald-800 bg-emerald-50 px-2.5 py-1 rounded border border-emerald-300">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>
+                          Linked Corrective Action Ticket: {linkedIssue?.code || 'Assigned'} ({linkedIssue?.status.toUpperCase() || 'OPEN'})
+                        </span>
+                      </div>
                     )}
                   </div>
 
@@ -532,15 +865,15 @@ export const DrillDetailPage: React.FC = () => {
           </Select>
 
           <div>
-            <label className="block text-xs font-semibold text-brand-graphite-700 uppercase tracking-wider mb-1.5">
+            <label className="block text-xs font-semibold text-brand-graphite-700 uppercase tracking-wider mb-1 font-mono">
               Detailed Observation Note
             </label>
             <textarea
               rows={3}
               value={obsText}
               onChange={(e) => setObsText(e.target.value)}
-              placeholder="e.g. West stairwell door was partially propped or hindered by storage boxes, slowing down occupants during evacuation surge..."
-              className="w-full text-xs p-2.5 rounded border border-brand-border focus:border-brand-red focus:ring-1 focus:ring-brand-red"
+              placeholder="e.g. West stairwell door was partially hindered by storage boxes, slowing down occupants during evacuation surge..."
+              className="w-full text-xs p-2.5 rounded border border-brand-border bg-white text-brand-graphite-900 focus:outline-none focus:border-brand-red font-sans"
               required
             />
           </div>

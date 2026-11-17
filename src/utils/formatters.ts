@@ -34,7 +34,9 @@ export function formatActionStatus(status: ActionStatus): { label: string; bg: s
     case 'in_progress':
       return { label: 'In Progress', bg: 'bg-amber-50 text-amber-700 border-amber-200', text: 'text-amber-700' };
     case 'resolved':
-      return { label: 'Resolved', bg: 'bg-emerald-50 text-emerald-700 border-emerald-200', text: 'text-emerald-700' };
+      return { label: 'Remediated (Awaiting Sign-off)', bg: 'bg-blue-50 text-blue-700 border-blue-200', text: 'text-blue-700' };
+    case 'verified':
+      return { label: 'Resolved & Verified', bg: 'bg-emerald-50 text-emerald-700 border-emerald-200', text: 'text-emerald-700' };
   }
 }
 

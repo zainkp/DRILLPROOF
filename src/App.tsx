@@ -2,14 +2,17 @@ import React from 'react';
 import { BrowserRouter } from 'react-router-dom';
 import { DataProvider } from './hooks/useData';
 import { AppRoutes } from './routes/AppRoutes';
+import { ErrorBoundary } from './components/common/ErrorBoundary';
 
 export function App() {
   return (
-    <BrowserRouter>
-      <DataProvider>
-        <AppRoutes />
-      </DataProvider>
-    </BrowserRouter>
+    <ErrorBoundary>
+      <BrowserRouter>
+        <DataProvider>
+          <AppRoutes />
+        </DataProvider>
+      </BrowserRouter>
+    </ErrorBoundary>
   );
 }
 

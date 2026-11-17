@@ -3,6 +3,7 @@ import { Outlet } from 'react-router-dom';
 import { Sidebar } from '../components/common/Sidebar';
 import { Header } from '../components/common/Header';
 import { QuickActionModal } from '../components/common/QuickActionModal';
+import { ErrorBoundary } from '../components/common/ErrorBoundary';
 
 export const AppLayout: React.FC = () => {
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -34,7 +35,9 @@ export const AppLayout: React.FC = () => {
         {/* Dynamic Page Outlet with subtle neutral canvas */}
         <main className="flex-1 p-4 sm:p-6 lg:p-8 overflow-y-auto">
           <div className="max-w-7xl mx-auto w-full">
-            <Outlet />
+            <ErrorBoundary>
+              <Outlet />
+            </ErrorBoundary>
           </div>
         </main>
       </div>

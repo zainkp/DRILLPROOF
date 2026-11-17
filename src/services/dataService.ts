@@ -10,6 +10,7 @@ import {
   HazardType,
   StaffMember,
   Inspection,
+  ChecklistItem,
   Drill,
   SafetyIssue,
   ActivityItem,
@@ -103,29 +104,150 @@ export class DataService {
     if (!localStorage.getItem(STORAGE_KEYS.BUILDINGS)) {
       this.resetToDefaults();
     } else {
-      // Data migration: ensure stored floors contain sample SVGs and all demo buildings
+      // Data migration & integrity reconciliation
       try {
+        // 1. Reconcile floors
         const storedFloors = safeGet<Floor[]>(STORAGE_KEYS.FLOORS, []);
-        let updated = false;
+        let floorsUpdated = false;
 
         for (const mf of mockFloors) {
           const found = storedFloors.find((f) => f.id === mf.id);
           if (!found) {
             storedFloors.push(mf);
-            updated = true;
+            floorsUpdated = true;
           } else if (!found.floorPlanUrl && mf.floorPlanUrl) {
             found.floorPlanUrl = mf.floorPlanUrl;
             found.floorPlanType = mf.floorPlanType;
             found.floorPlanDisclaimer = mf.floorPlanDisclaimer;
-            updated = true;
+            floorsUpdated = true;
           }
         }
 
-        if (updated) {
+        if (floorsUpdated) {
           safeSet(STORAGE_KEYS.FLOORS, storedFloors);
         }
+
+        // 2. Reconcile inspections and issues integrity
+        const storedInspections = safeGet<Inspection[]>(STORAGE_KEYS.INSPECTIONS, mockInspections);
+        const storedIssues = safeGet<SafetyIssue[]>(STORAGE_KEYS.ISSUES, mockSafetyIssues);
+        let inspectionsChanged = false;
+        let issuesChanged = false;
+
+        // Ensure all stored issues with source inspection have checklistItemId, checklistItemLabel, buildingId, floorId
+        for (const iss of storedIssues) {
+          if (iss.sourceType === 'inspection' && iss.sourceId) {
+            const srcInsp = storedInspections.find((i) => i.id === iss.sourceId);
+            if (srcInsp) {
+              if (!iss.checklistItemId) {
+                const match = srcInsp.items.find(
+                  (it) =>
+                    it.linkedIssueId === iss.id ||
+                    (it.label &&
+                      iss.title &&
+                      (iss.title.toLowerCase().includes(it.label.toLowerCase()) ||
+                        (it.label.toLowerCase().includes('extinguisher') &&
+                          iss.title.toLowerCase().includes('extinguisher')) ||
+                        (it.label.toLowerCase().includes('battery') &&
+                          iss.title.toLowerCase().includes('battery'))))
+                );
+                if (match) {
+                  iss.checklistItemId = match.id;
+                  iss.checklistItemLabel = match.label;
+                  match.linkedIssueId = iss.id;
+                  match.flaggedAsIssue = true;
+                  inspectionsChanged = true;
+                  issuesChanged = true;
+                }
+              }
+              if (!iss.buildingId) {
+                iss.buildingId = srcInsp.buildingId;
+                iss.buildingName = srcInsp.buildingName;
+                issuesChanged = true;
+              }
+              if (!iss.floorId && srcInsp.floorId) {
+                iss.floorId = srcInsp.floorId;
+                iss.floorLabel = srcInsp.floorLabel;
+                issuesChanged = true;
+              }
+            }
+          }
+        }
+
+        // Ensure all inspection checklist items have valid category and linkedIssueId if an issue exists
+        for (const insp of storedInspections) {
+          for (const item of insp.items) {
+            if (!item.category) {
+              item.category = 'general_safety';
+              inspectionsChanged = true;
+            }
+            if (!item.linkedIssueId && item.status === 'needs_attention') {
+              const matchedIssue = storedIssues.find(
+                (iss) =>
+                  iss.sourceId === insp.id &&
+                  (iss.checklistItemId === item.id ||
+                    (iss.title &&
+                      item.label &&
+                      iss.title.toLowerCase().includes(item.label.toLowerCase())))
+              );
+              if (matchedIssue) {
+                item.linkedIssueId = matchedIssue.id;
+                item.flaggedAsIssue = true;
+                if (!matchedIssue.checklistItemId) {
+                  matchedIssue.checklistItemId = item.id;
+                  matchedIssue.checklistItemLabel = item.label;
+                  issuesChanged = true;
+                }
+                inspectionsChanged = true;
+              }
+            }
+          }
+        }
+
+        // Recalculate metrics & status for stored inspections
+        for (const insp of storedInspections) {
+          const pCount = insp.items.filter((i) => i.status === 'pass').length;
+          const aCount = insp.items.filter((i) => i.status === 'needs_attention').length;
+          const uCount = insp.items.filter((i) => i.status === 'not_checked').length;
+          const ev = pCount + aCount;
+          const sc = ev > 0 ? Math.round((pCount / ev) * 100) : 0;
+          const st: Inspection['status'] =
+            uCount > 0 ? 'pending' : aCount > 0 ? 'needs_attention' : 'passed';
+
+          if (
+            insp.passedCount !== pCount ||
+            insp.attentionCount !== aCount ||
+            insp.notCheckedCount !== uCount ||
+            insp.score !== sc ||
+            insp.status !== st
+          ) {
+            insp.passedCount = pCount;
+            insp.attentionCount = aCount;
+            insp.notCheckedCount = uCount;
+            insp.score = sc;
+            insp.status = st;
+            inspectionsChanged = true;
+          }
+        }
+
+        // 3. Reconcile building activeIssuesCount
+        const storedBuildings = safeGet<Building[]>(STORAGE_KEYS.BUILDINGS, mockBuildings);
+        let buildingsChanged = false;
+        for (const bld of storedBuildings) {
+          const actualActive = storedIssues.filter(
+            (iss) =>
+              iss.buildingId === bld.id && (iss.status === 'open' || iss.status === 'in_progress')
+          ).length;
+          if (bld.activeIssuesCount !== actualActive) {
+            bld.activeIssuesCount = actualActive;
+            buildingsChanged = true;
+          }
+        }
+
+        if (inspectionsChanged) safeSet(STORAGE_KEYS.INSPECTIONS, storedInspections);
+        if (issuesChanged) safeSet(STORAGE_KEYS.ISSUES, storedIssues);
+        if (buildingsChanged) safeSet(STORAGE_KEYS.BUILDINGS, storedBuildings);
       } catch (e) {
-        console.warn('Floor migration error:', e);
+        console.warn('Data reconciliation error:', e);
       }
     }
   }
@@ -589,7 +711,7 @@ export class DataService {
     const evaluated = passedCount + attentionCount;
     const score = evaluated > 0 ? Math.round((passedCount / evaluated) * 100) : 0;
     const status: Inspection['status'] =
-      attentionCount > 0 ? 'needs_attention' : notCheckedCount === 0 && passedCount > 0 ? 'passed' : 'pending';
+      notCheckedCount > 0 ? 'pending' : attentionCount > 0 ? 'needs_attention' : 'passed';
 
     const newInspection: Inspection = {
       ...inspection,
@@ -638,11 +760,46 @@ export class DataService {
     const evaluated = passedCount + attentionCount;
     const score = evaluated > 0 ? Math.round((passedCount / evaluated) * 100) : 0;
     const status: Inspection['status'] =
-      attentionCount > 0 ? 'needs_attention' : notCheckedCount === 0 && passedCount > 0 ? 'passed' : 'pending';
+      notCheckedCount > 0 ? 'pending' : attentionCount > 0 ? 'needs_attention' : 'passed';
 
     inspections[index] = {
       ...current,
       ...updates,
+      items,
+      passedCount,
+      attentionCount,
+      notCheckedCount,
+      score,
+      status,
+    };
+    safeSet(STORAGE_KEYS.INSPECTIONS, inspections);
+    return inspections[index];
+  }
+
+  static updateChecklistItem(
+    inspectionId: string,
+    itemId: string,
+    itemUpdates: Partial<ChecklistItem>
+  ): Inspection | undefined {
+    const inspections = this.getInspections();
+    const index = inspections.findIndex((i) => i.id === inspectionId);
+    if (index === -1) return undefined;
+
+    const current = inspections[index];
+    const items = current.items.map((it) =>
+      it.id === itemId ? { ...it, ...itemUpdates } : it
+    );
+
+    const passedCount = items.filter((i) => i.status === 'pass').length;
+    const attentionCount = items.filter((i) => i.status === 'needs_attention').length;
+    const notCheckedCount = items.filter((i) => i.status === 'not_checked').length;
+    const evaluated = passedCount + attentionCount;
+    const score = evaluated > 0 ? Math.round((passedCount / evaluated) * 100) : 0;
+    const status: Inspection['status'] =
+      notCheckedCount > 0 ? 'pending' : attentionCount > 0 ? 'needs_attention' : 'passed';
+
+    inspections[index] = {
+      ...current,
       items,
       passedCount,
       attentionCount,
@@ -745,7 +902,61 @@ export class DataService {
     return this.updateDrill(drillId, drill);
   }
 
+  static deleteDrill(id: string): boolean {
+    const drills = this.getDrills();
+    const target = drills.find((d) => d.id === id);
+    if (!target) return false;
+    const filtered = drills.filter((d) => d.id !== id);
+    safeSet(STORAGE_KEYS.DRILLS, filtered);
+    return true;
+  }
+
   // Safety Issues / Corrective Actions
+  static calculateBuildingReadiness(buildingId: string): number {
+    const issues = this.getSafetyIssues().filter((i) => i.buildingId === buildingId);
+    const inspections = this.getInspections().filter((i) => i.buildingId === buildingId);
+    const drills = this.getDrills().filter((d) => d.buildingId === buildingId);
+
+    const openCritical = issues.filter(
+      (i) => (i.status === 'open' || i.status === 'in_progress') && (i.priority === 'critical' || i.priority === 'high')
+    ).length;
+    const openOther = issues.filter(
+      (i) => (i.status === 'open' || i.status === 'in_progress') && (i.priority === 'medium' || i.priority === 'low')
+    ).length;
+    const pendingInspec = inspections.filter(
+      (i) => (i.notCheckedCount || 0) > 0 || i.status === 'pending'
+    ).length;
+    const completedDrills = drills.filter((d) => d.status === 'completed').length;
+
+    const penalty = openCritical * 8 + openOther * 3 + pendingInspec * 4;
+    const bonus = Math.min(10, completedDrills * 3);
+    return Math.max(45, Math.min(100, 100 - penalty + bonus));
+  }
+
+  static syncBuildingActiveIssues(buildingId?: string): void {
+    const buildings = this.getBuildings();
+    const issues = this.getSafetyIssues();
+    let changed = false;
+
+    for (const bld of buildings) {
+      if (!buildingId || bld.id === buildingId) {
+        const activeCount = issues.filter(
+          (i) => i.buildingId === bld.id && (i.status === 'open' || i.status === 'in_progress')
+        ).length;
+        const newScore = this.calculateBuildingReadiness(bld.id);
+        if (bld.activeIssuesCount !== activeCount || bld.readinessScore !== newScore) {
+          bld.activeIssuesCount = activeCount;
+          bld.readinessScore = newScore;
+          changed = true;
+        }
+      }
+    }
+
+    if (changed) {
+      safeSet(STORAGE_KEYS.BUILDINGS, buildings);
+    }
+  }
+
   static getSafetyIssues(): SafetyIssue[] {
     return safeGet<SafetyIssue[]>(STORAGE_KEYS.ISSUES, mockSafetyIssues);
   }
@@ -756,23 +967,25 @@ export class DataService {
 
   static createSafetyIssue(issue: Omit<SafetyIssue, 'id' | 'code' | 'createdAt'>): SafetyIssue {
     const issues = this.getSafetyIssues();
-    const num = 100 + issues.length + 1;
+    // Calculate next sequential code from highest existing ACT number
+    let maxNum = 100;
+    for (const iss of issues) {
+      const match = iss.code?.match(/ACT-(\d+)/);
+      if (match) {
+        const val = parseInt(match[1], 10);
+        if (val > maxNum) maxNum = val;
+      }
+    }
+    const code = `ACT-${maxNum + 1}`;
     const newIssue: SafetyIssue = {
       ...issue,
-      id: `iss-${Date.now()}`,
-      code: `ACT-${num}`,
+      id: `iss-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      code,
       createdAt: new Date().toISOString(),
     };
     issues.unshift(newIssue);
     safeSet(STORAGE_KEYS.ISSUES, issues);
-
-    // Update building issue counter
-    const buildings = this.getBuildings();
-    const bld = buildings.find((b) => b.id === newIssue.buildingId);
-    if (bld) {
-      bld.activeIssuesCount = (bld.activeIssuesCount || 0) + 1;
-      safeSet(STORAGE_KEYS.BUILDINGS, buildings);
-    }
+    this.syncBuildingActiveIssues(newIssue.buildingId);
 
     this.addActivity({
       type: 'issue',
@@ -793,18 +1006,10 @@ export class DataService {
 
     const prevStatus = issues[index].status;
     issues[index] = { ...issues[index], ...updates };
-
-    // If resolved, decrement active issues count on building
-    if (prevStatus !== 'resolved' && updates.status === 'resolved') {
-      const buildings = this.getBuildings();
-      const bld = buildings.find((b) => b.id === issues[index].buildingId);
-      if (bld && bld.activeIssuesCount > 0) {
-        bld.activeIssuesCount -= 1;
-        safeSet(STORAGE_KEYS.BUILDINGS, buildings);
-      }
-    }
+    const newStatus = issues[index].status;
 
     safeSet(STORAGE_KEYS.ISSUES, issues);
+    this.syncBuildingActiveIssues(issues[index].buildingId);
     return issues[index];
   }
 
@@ -821,22 +1026,56 @@ export class DataService {
     });
   }
 
+  static verifySafetyIssue(
+    id: string,
+    verificationNote: string,
+    verifiedBy: string
+  ): SafetyIssue | undefined {
+    const updated = this.updateSafetyIssue(id, {
+      status: 'verified',
+      verificationNote,
+      verifiedBy,
+      verifiedAt: new Date().toISOString(),
+    });
+
+    if (updated) {
+      this.addActivity({
+        type: 'issue',
+        title: 'Remediation Verified & Closed',
+        description: `Corrective action ${updated.code} verified and closed by ${verifiedBy}.`,
+        actorName: verifiedBy,
+        targetUrl: '/issues',
+        badgeType: 'success',
+      });
+    }
+
+    return updated;
+  }
+
   static deleteSafetyIssue(id: string): boolean {
     const issues = this.getSafetyIssues();
     const target = issues.find((i) => i.id === id);
     if (!target) return false;
 
-    if (target.status !== 'resolved') {
-      const buildings = this.getBuildings();
-      const bld = buildings.find((b) => b.id === target.buildingId);
-      if (bld && bld.activeIssuesCount > 0) {
-        bld.activeIssuesCount -= 1;
-        safeSet(STORAGE_KEYS.BUILDINGS, buildings);
+    // Unlink this issue from any checklist items in inspections
+    const inspections = this.getInspections();
+    let inspectionsChanged = false;
+    for (const insp of inspections) {
+      for (const item of insp.items) {
+        if (item.linkedIssueId === id) {
+          item.linkedIssueId = undefined;
+          item.flaggedAsIssue = false;
+          inspectionsChanged = true;
+        }
       }
+    }
+    if (inspectionsChanged) {
+      safeSet(STORAGE_KEYS.INSPECTIONS, inspections);
     }
 
     const filtered = issues.filter((i) => i.id !== id);
     safeSet(STORAGE_KEYS.ISSUES, filtered);
+    this.syncBuildingActiveIssues(target.buildingId);
     return true;
   }
 
@@ -872,13 +1111,32 @@ export class DataService {
     const openIssues = issues.filter((i) => i.status === 'open' || i.status === 'in_progress');
     const openIssuesCount = openIssues.length;
     const criticalIssuesCount = openIssues.filter((i) => i.priority === 'critical' || i.priority === 'high').length;
+    const resolvedIssuesCount = issues.filter((i) => i.status === 'resolved').length;
+    const verifiedIssuesCount = issues.filter((i) => i.status === 'verified').length;
 
-    const pendingInspectionsCount = inspections.filter((i) => i.status === 'needs_attention' || i.status === 'pending').length;
+    // pendingInspectionsCount:
+    // Inspections that have unchecked items (notCheckedCount > 0 or status === 'pending')
+    // OR completed inspections with active/unresolved deficiencies.
+    const pendingInspectionsCount = inspections.filter((i) => {
+      // 1. Incomplete audit (has unchecked items)
+      if ((i.notCheckedCount || 0) > 0 || i.status === 'pending') return true;
+      // 2. Audit with deficiencies: only pending if at least one deficiency is NOT resolved/verified
+      if (i.status === 'needs_attention' || (i.attentionCount || 0) > 0) {
+        return i.items.some((item) => {
+          if (item.status !== 'needs_attention') return false;
+          if (!item.linkedIssueId) return true; // Defect with no ticket yet
+          const linked = issues.find((iss) => iss.id === item.linkedIssueId);
+          return !linked || (linked.status !== 'resolved' && linked.status !== 'verified');
+        });
+      }
+      return false;
+    }).length;
 
-    // Illustrative score calculation (transparent, honest):
-    // Base 100 - (critical issues * 7) - (medium issues * 3) - (pending inspections * 4) + (completed drills bonus)
+    // Transparent Institutional Readiness Score calculation:
+    // Base 100 - (critical issues * 8) - (medium issues * 3) - (pending inspections * 4) + (completed drills bonus)
     const penalty = (criticalIssuesCount * 8) + ((openIssuesCount - criticalIssuesCount) * 3) + (pendingInspectionsCount * 4);
-    const calculatedScore = Math.max(45, Math.min(98, 100 - penalty));
+    const bonus = Math.min(8, completedDrillsCount * 2);
+    const calculatedScore = Math.max(45, Math.min(99, 100 - penalty + bonus));
 
     return {
       registeredBuildingsCount,
@@ -887,6 +1145,8 @@ export class DataService {
       plannedDrillsCount,
       openIssuesCount,
       criticalIssuesCount,
+      resolvedIssuesCount,
+      verifiedIssuesCount,
       pendingInspectionsCount,
       overallReadinessScore: calculatedScore,
       isDemoData: true,

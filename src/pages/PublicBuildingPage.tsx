@@ -40,12 +40,13 @@ export const PublicBuildingPage: React.FC = () => {
   const rawIdentifier = (slug || buildingId || '').trim();
   const normalizedIdentifier = rawIdentifier.toLowerCase();
 
-  // Strict lookup by slug or id — NEVER fall back to another building
+  // Strict lookup by slug, id, or code — NEVER fall back to another building
   const building = rawIdentifier
     ? buildings.find(
         (b) =>
           b.slug.toLowerCase() === normalizedIdentifier ||
-          b.id.toLowerCase() === normalizedIdentifier
+          b.id.toLowerCase() === normalizedIdentifier ||
+          (b.code && b.code.toLowerCase() === normalizedIdentifier)
       )
     : undefined;
 

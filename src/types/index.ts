@@ -10,7 +10,7 @@ export type HazardType =
 
 export type PriorityLevel = 'low' | 'medium' | 'high' | 'critical';
 
-export type ActionStatus = 'open' | 'in_progress' | 'resolved';
+export type ActionStatus = 'open' | 'in_progress' | 'resolved' | 'verified';
 
 export type InspectionStatus = 'pass' | 'needs_attention' | 'not_checked';
 
@@ -233,6 +233,9 @@ export interface Drill {
   leadCoordinatorName: string;
   floorCheckins: DrillCheckin[];
   observations: DrillObservation[];
+  drillInstructions?: string;
+  assignedWardenIds?: string[];
+  participatingFloorIds?: string[];
   isDemo: boolean;
 }
 
@@ -260,6 +263,9 @@ export interface SafetyIssue {
   resolutionNote?: string;
   resolvedAt?: string;
   resolvedBy?: string;
+  verificationNote?: string;
+  verifiedAt?: string;
+  verifiedBy?: string;
 }
 
 export interface ActivityItem {
