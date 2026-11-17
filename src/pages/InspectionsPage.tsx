@@ -45,6 +45,7 @@ export const InspectionsPage: React.FC = () => {
     updateChecklistItem,
     deleteInspection,
     createSafetyIssue,
+    verifySafetyIssue,
     user,
   } = useData();
 
@@ -53,12 +54,38 @@ export const InspectionsPage: React.FC = () => {
   // Modal States
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [selectedInspectionId, setSelectedInspectionId] = useState<string | null>(null);
-  const [reviewItemFilter, setReviewItemFilter] = useState<'all' | 'pending' | 'needs_attention' | 'pass'>('all');
+  const [reviewItemFilter, setReviewItemFilter] = useState<
+    'all' | 'pending' | 'active_defects' | 'remediated' | 'needs_attention' | 'pass'
+  >('all');
   const [createActionModalItem, setCreateActionModalItem] = useState<{
     inspection: Inspection;
     item: ChecklistItem;
   } | null>(null);
   const [createTicketImmediately, setCreateTicketImmediately] = useState(true);
+
+  // Inspection Continuation State
+  const [continueModalInspection, setContinueModalInspection] = useState<Inspection | null>(null);
+  const [continueChecklist, setContinueChecklist] = useState<ChecklistItem[]>([]);
+  const [continueNotes, setContinueNotes] = useState('');
+  const [continueActionConfigs, setContinueActionConfigs] = useState<
+    Record<
+      string,
+      {
+        enabled: boolean;
+        priority: PriorityLevel;
+        assignedStaffId: string;
+        dueDate: string;
+      }
+    >
+  >({});
+
+  // Inline Admin Verification Modal State
+  const [verifyModalAction, setVerifyModalAction] = useState<{
+    inspection: Inspection;
+    item: ChecklistItem;
+    issue: SafetyIssue;
+  } | null>(null);
+  const [verifyNote, setVerifyNote] = useState('');
 
   // Filter States
   const [searchQuery, setSearchQuery] = useState('');
@@ -175,12 +202,13 @@ export const InspectionsPage: React.FC = () => {
   const notCheckedCount = checklist.filter((item) => item.status === 'not_checked').length;
   const evaluatedCount = passCount + attentionCount;
   const liveScore = evaluatedCount > 0 ? Math.round((passCount / evaluatedCount) * 100) : 0;
-  const liveStatus =
-    attentionCount > 0
+  // Incomplete audits with unchecked items are always 'pending'
+  const liveStatus: Inspection['status'] =
+    notCheckedCount > 0
+      ? 'pending'
+      : attentionCount > 0
       ? 'needs_attention'
-      : notCheckedCount === 0 && passCount > 0
-      ? 'passed'
-      : 'pending';
+      : 'passed';
 
   // Submit New Inspection
   const handleSubmitInspection = (e: React.FormEvent) => {
@@ -261,21 +289,47 @@ export const InspectionsPage: React.FC = () => {
     setItemActionConfigs({});
   };
 
-  // Helper to determine if all defects for an inspection are resolved
+  // Helper to find linked corrective action for a checklist item
+  const getLinkedIssue = (item: ChecklistItem, inspectionId: string) => {
+    return issues.find(
+      (iss) =>
+        (item.linkedIssueId && iss.id === item.linkedIssueId) ||
+        (iss.sourceId === inspectionId &&
+          (iss.checklistItemId === item.id || iss.title.includes(item.label)))
+    );
+  };
+
+  // Helper to check if an item's defect has been remediated (resolved or verified)
+  const isItemRemediated = (item: ChecklistItem, inspectionId: string) => {
+    const issue = getLinkedIssue(item, inspectionId);
+    return !!(issue && (issue.status === 'resolved' || issue.status === 'verified'));
+  };
+
+  // Helper to determine if all defects for an inspection are resolved/verified
   const areAllDefectsResolved = (insp: Inspection) => {
     const defects = insp.items.filter((i) => i.status === 'needs_attention');
     if (defects.length === 0) return true;
-    return defects.every((item) => {
-      if (!item.linkedIssueId) return false;
-      const issue = issues.find((iss) => iss.id === item.linkedIssueId);
-      return issue && issue.status === 'resolved';
-    });
+    return defects.every((item) => isItemRemediated(item, insp.id));
   };
+
+  // Dynamic count helpers
+  const getInspectionPendingCount = (insp: Inspection) =>
+    insp.items.filter((i) => i.status === 'not_checked').length;
+  const getInspectionAttentionCount = (insp: Inspection) =>
+    insp.items.filter((i) => i.status === 'needs_attention').length;
+  const getInspectionPassedCount = (insp: Inspection) =>
+    insp.items.filter((i) => i.status === 'pass').length;
+  const isAuditIncomplete = (insp: Inspection) =>
+    getInspectionPendingCount(insp) > 0 || insp.status === 'pending';
+  const getInspectionRemediatedCount = (insp: Inspection) =>
+    insp.items.filter((i) => i.status === 'needs_attention' && isItemRemediated(i, insp.id)).length;
+  const getInspectionActiveDefectsCount = (insp: Inspection) =>
+    insp.items.filter((i) => i.status === 'needs_attention' && !isItemRemediated(i, insp.id)).length;
 
   // Open inspection modal with specific tab
   const handleOpenAudit = (
     insp: Inspection,
-    tab: 'all' | 'pending' | 'needs_attention' | 'pass' = 'all'
+    tab: 'all' | 'pending' | 'active_defects' | 'remediated' | 'needs_attention' | 'pass' = 'all'
   ) => {
     setSelectedInspectionId(insp.id);
     setReviewItemFilter(tab);
@@ -297,6 +351,147 @@ export const InspectionsPage: React.FC = () => {
     updateChecklistItem(inspectionId, itemId, {
       status: newStatus,
     });
+  };
+
+  // Open Continuation Runner for Incomplete Inspection
+  const handleStartContinueInspection = (insp: Inspection) => {
+    setContinueModalInspection(insp);
+    setContinueChecklist([...insp.items]);
+    setContinueNotes(insp.notes || '');
+    setContinueActionConfigs({});
+  };
+
+  const handleContinueStatusChange = (id: string, newStatus: InspectionStatus) => {
+    setContinueChecklist((prev) =>
+      prev.map((item) => (item.id === id ? { ...item, status: newStatus } : item))
+    );
+  };
+
+  const handleContinueItemNoteChange = (id: string, note: string) => {
+    setContinueChecklist((prev) =>
+      prev.map((item) => (item.id === id ? { ...item, notes: note } : item))
+    );
+  };
+
+  const handleContinueActionToggle = (id: string, enabled: boolean) => {
+    setContinueActionConfigs((prev) => ({
+      ...prev,
+      [id]: {
+        enabled,
+        priority: prev[id]?.priority || 'high',
+        assignedStaffId:
+          prev[id]?.assignedStaffId ||
+          staff.find((s) => s.emergencyRole === 'Facility Manager')?.id ||
+          staff[0]?.id ||
+          '',
+        dueDate:
+          prev[id]?.dueDate ||
+          new Date(Date.now() + 86400000 * 3).toISOString().split('T')[0],
+      },
+    }));
+  };
+
+  const handleContinueActionConfigChange = (
+    id: string,
+    field: 'priority' | 'assignedStaffId' | 'dueDate',
+    val: any
+  ) => {
+    setContinueActionConfigs((prev) => ({
+      ...prev,
+      [id]: {
+        ...prev[id],
+        [field]: val,
+      },
+    }));
+  };
+
+  const handleSaveContinueProgress = (finalize: boolean) => {
+    if (!continueModalInspection) return;
+
+    let updatedChecklist = [...continueChecklist];
+
+    // Create tickets for newly enabled action configs on needs_attention items
+    continueChecklist.forEach((item, idx) => {
+      const cfg = continueActionConfigs[item.id];
+      if (item.status === 'needs_attention' && cfg?.enabled && !item.linkedIssueId) {
+        const assignedStaff = staff.find((s) => s.id === cfg.assignedStaffId) || staff[0];
+        const newIssue = createSafetyIssue({
+          institutionId: continueModalInspection.institutionId,
+          buildingId: continueModalInspection.buildingId,
+          buildingName: continueModalInspection.buildingName,
+          floorId: continueModalInspection.floorId,
+          floorLabel: continueModalInspection.floorLabel || 'General Facility',
+          sourceType: 'inspection',
+          sourceId: continueModalInspection.id,
+          checklistItemId: item.id,
+          checklistItemLabel: item.label,
+          title: `Inspection Defect: ${item.label}`,
+          description:
+            item.notes?.trim() ||
+            `Identified during inspection continuation on ${new Date().toISOString().split('T')[0]}. Remediate immediately.`,
+          priority: cfg.priority || 'high',
+          assignedToName: assignedStaff?.name || 'Facilities Maintenance Supervisor',
+          assignedToRole: assignedStaff?.emergencyRole || 'Facility Manager',
+          assignedToId: assignedStaff?.id,
+          dueDate: cfg.dueDate || new Date(Date.now() + 86400000 * 3).toISOString().split('T')[0],
+          status: 'open',
+        });
+
+        updatedChecklist[idx] = {
+          ...item,
+          flaggedAsIssue: true,
+          linkedIssueId: newIssue.id,
+        };
+      }
+    });
+
+    const pCount = updatedChecklist.filter((i) => i.status === 'pass').length;
+    const aCount = updatedChecklist.filter((i) => i.status === 'needs_attention').length;
+    const uCount = updatedChecklist.filter((i) => i.status === 'not_checked').length;
+    const evalCount = pCount + aCount;
+    const newScore = evalCount > 0 ? Math.round((pCount / evalCount) * 100) : 0;
+
+    let finalStatus: InspectionStatus | 'passed' | 'needs_attention' | 'pending';
+    if (!finalize) {
+      finalStatus = 'pending';
+    } else {
+      finalStatus = uCount > 0 ? 'pending' : aCount > 0 ? 'needs_attention' : 'passed';
+    }
+
+    updateInspection(continueModalInspection.id, {
+      items: updatedChecklist,
+      notes: continueNotes.trim() || continueModalInspection.notes,
+      passedCount: pCount,
+      attentionCount: aCount,
+      notCheckedCount: uCount,
+      score: newScore,
+      status: finalStatus as any,
+    });
+
+    setContinueModalInspection(null);
+  };
+
+  // Open Verify Modal from inside Inspection
+  const handleOpenVerifyModal = (
+    insp: Inspection,
+    item: ChecklistItem,
+    action: SafetyIssue
+  ) => {
+    setVerifyModalAction({ inspection: insp, item, issue: action });
+    setVerifyNote('Remediation verified on site and approved compliant.');
+  };
+
+  const handleConfirmVerifyAction = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!verifyModalAction) return;
+
+    verifySafetyIssue(
+      verifyModalAction.issue.id,
+      verifyNote.trim() || 'Remediation verified on site and approved compliant.',
+      user?.name || 'Marcus Vance'
+    );
+
+    setVerifyModalAction(null);
   };
 
   // Open "Create Action from Reviewed Item / Flag Defect" modal
@@ -388,9 +583,9 @@ export const InspectionsPage: React.FC = () => {
       }
       // Status filter
       if (filterStatus !== 'all') {
-        const isIncomplete = (insp.notCheckedCount || 0) > 0 || insp.status === 'pending';
+        const isIncomplete = isAuditIncomplete(insp);
         const allResolved = areAllDefectsResolved(insp);
-        const hasDefects = (insp.attentionCount || 0) > 0;
+        const hasDefects = getInspectionAttentionCount(insp) > 0;
 
         if (filterStatus === 'pending' && !isIncomplete) return false;
         if (filterStatus === 'passed' && (isIncomplete || hasDefects)) return false;
@@ -418,20 +613,16 @@ export const InspectionsPage: React.FC = () => {
 
   // Overall Statistics Derived From Actual Data
   const totalInspectionsCount = inspections.length;
-  const pendingInspectionsCount = inspections.filter(
-    (i) => (i.notCheckedCount || 0) > 0 || i.status === 'pending'
+  const pendingInspectionsCount = inspections.filter((i) => isAuditIncomplete(i)).length;
+  const attentionInspectionsCount = inspections.filter(
+    (i) => !isAuditIncomplete(i) && getInspectionAttentionCount(i) > 0 && !areAllDefectsResolved(i)
   ).length;
-  const attentionInspectionsCount = inspections.filter((i) => {
-    if ((i.notCheckedCount || 0) > 0 || i.status === 'pending') return false;
-    return (i.attentionCount || 0) > 0 && !areAllDefectsResolved(i);
-  }).length;
   const passedInspectionsCount = inspections.filter(
-    (i) => (i.notCheckedCount || 0) === 0 && (i.attentionCount || 0) === 0
+    (i) => !isAuditIncomplete(i) && getInspectionAttentionCount(i) === 0
   ).length;
-  const resolvedInspectionsCount = inspections.filter((i) => {
-    if ((i.notCheckedCount || 0) > 0 || i.status === 'pending') return false;
-    return (i.attentionCount || 0) > 0 && areAllDefectsResolved(i);
-  }).length;
+  const resolvedInspectionsCount = inspections.filter(
+    (i) => !isAuditIncomplete(i) && getInspectionAttentionCount(i) > 0 && areAllDefectsResolved(i)
+  ).length;
 
   const selectedInspection = inspections.find((i) => i.id === selectedInspectionId);
 
@@ -441,6 +632,16 @@ export const InspectionsPage: React.FC = () => {
     if (reviewItemFilter === 'pending') {
       return selectedInspection.items.filter((i) => i.status === 'not_checked');
     }
+    if (reviewItemFilter === 'active_defects') {
+      return selectedInspection.items.filter(
+        (i) => i.status === 'needs_attention' && !isItemRemediated(i, selectedInspection.id)
+      );
+    }
+    if (reviewItemFilter === 'remediated') {
+      return selectedInspection.items.filter(
+        (i) => i.status === 'needs_attention' && isItemRemediated(i, selectedInspection.id)
+      );
+    }
     if (reviewItemFilter === 'needs_attention') {
       return selectedInspection.items.filter((i) => i.status === 'needs_attention');
     }
@@ -448,7 +649,7 @@ export const InspectionsPage: React.FC = () => {
       return selectedInspection.items.filter((i) => i.status === 'pass');
     }
     return selectedInspection.items;
-  }, [selectedInspection, reviewItemFilter]);
+  }, [selectedInspection, reviewItemFilter, issues]);
 
   return (
     <div className="space-y-6">
@@ -630,10 +831,19 @@ export const InspectionsPage: React.FC = () => {
         ) : (
           <div className="divide-y divide-brand-border">
             {filteredInspections.map((insp) => {
-              const pass = insp.items.filter((i) => i.status === 'pass').length;
-              const attn = insp.items.filter((i) => i.status === 'needs_attention').length;
-              const unchk = insp.items.filter((i) => i.status === 'not_checked').length;
+              const pass = getInspectionPassedCount(insp);
+              const attn = getInspectionAttentionCount(insp);
+              const unchk = getInspectionPendingCount(insp);
+              const isIncomplete = isAuditIncomplete(insp);
               const allResolved = areAllDefectsResolved(insp);
+              const remediatedCount = getInspectionRemediatedCount(insp);
+              const activeCount = getInspectionActiveDefectsCount(insp);
+
+              // Dual score calculation
+              const historicalScore = insp.score;
+              const evalCount = pass + attn;
+              const remediatedScore =
+                evalCount > 0 ? Math.round(((pass + remediatedCount) / evalCount) * 100) : 0;
 
               return (
                 <div
@@ -651,18 +861,18 @@ export const InspectionsPage: React.FC = () => {
                           {insp.floorLabel}
                         </span>
                       )}
-                      {unchk > 0 ? (
+                      {isIncomplete ? (
                         <Badge variant="warning" size="sm">
                           INCOMPLETE ({unchk} PENDING)
                         </Badge>
                       ) : attn > 0 ? (
                         allResolved ? (
-                          <Badge variant="success" size="sm">
-                            ACTIONS RESOLVED
+                          <Badge variant="success" size="sm" className="bg-emerald-100 text-emerald-800 border-emerald-300">
+                            ALL DEFICIENCIES REMEDIATED
                           </Badge>
                         ) : (
                           <Badge variant="critical" size="sm">
-                            NEEDS ATTENTION
+                            NEEDS ATTENTION ({activeCount} ACTIVE)
                           </Badge>
                         )
                       ) : (
@@ -687,7 +897,13 @@ export const InspectionsPage: React.FC = () => {
                       <span>Date: <strong className="text-brand-graphite-700">{formatDateString(insp.date)}</strong></span>
                       <span>
                         Results: <strong className="text-emerald-700">{pass} Pass</strong> &bull;{' '}
-                        <strong className="text-red-600">{attn} Defect{attn !== 1 ? 's' : ''}</strong>
+                        {attn > 0 && (
+                          allResolved ? (
+                            <strong className="text-emerald-700">{attn} Remediated</strong>
+                          ) : (
+                            <strong className="text-red-600">{activeCount} Defect{activeCount !== 1 ? 's' : ''} Active</strong>
+                          )
+                        )}
                         {unchk > 0 && <span> &bull; <strong className="text-amber-600">{unchk} Pending Verification</strong></span>}
                       </span>
                     </div>
@@ -696,39 +912,50 @@ export const InspectionsPage: React.FC = () => {
                   <div className="flex items-center justify-between md:justify-end gap-4 flex-shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-brand-border/60">
                     <div className="text-left md:text-right">
                       <span className="text-[10px] uppercase font-bold text-brand-graphite-400 block font-mono">
-                        Audit Score
+                        {allResolved && attn > 0 ? 'Remediated Score' : 'Audit Score'}
                       </span>
-                      <span
-                        className={`text-xl font-mono font-bold ${
-                          insp.score >= 90
-                            ? 'text-emerald-700'
-                            : insp.score >= 70
-                            ? 'text-amber-700'
-                            : 'text-red-700'
-                        }`}
-                      >
-                        {insp.score}%
-                      </span>
-                      {unchk > 0 && (
+                      <div className="flex items-baseline md:justify-end gap-1.5 font-mono">
+                        <span
+                          className={`text-xl font-bold ${
+                            remediatedScore >= 90
+                              ? 'text-emerald-700'
+                              : remediatedScore >= 70
+                              ? 'text-amber-700'
+                              : 'text-red-700'
+                          }`}
+                        >
+                          {allResolved && attn > 0 ? `${remediatedScore}%` : `${historicalScore}%`}
+                        </span>
+                        {allResolved && attn > 0 && (
+                          <span className="text-[11px] text-brand-graphite-400 line-through" title="Historical audit score">
+                            {historicalScore}%
+                          </span>
+                        )}
+                      </div>
+                      {isIncomplete ? (
                         <span className="text-[10px] text-amber-600 block font-mono">
                           {unchk} unchecked
                         </span>
-                      )}
+                      ) : allResolved && attn > 0 ? (
+                        <span className="text-[10px] text-emerald-700 block font-mono">
+                          all defects closed
+                        </span>
+                      ) : null}
                     </div>
 
                     <div className="flex items-center gap-2">
-                      {unchk > 0 && (
+                      {isIncomplete && (
                         <Button
                           size="sm"
                           variant="primary"
                           icon={ClipboardCheck}
                           onClick={(e) => {
                             e.stopPropagation();
-                            handleOpenAudit(insp, 'pending');
+                            handleStartContinueInspection(insp);
                           }}
                           className="text-xs bg-amber-600 hover:bg-amber-700 text-white border-none font-medium shadow-xs"
                         >
-                          Continue Verification ({unchk})
+                          Continue Inspection ({unchk})
                         </Button>
                       )}
                       <Button
@@ -1075,9 +1302,23 @@ export const InspectionsPage: React.FC = () => {
           <div className="space-y-4">
             {/* Header Result Card */}
             {(() => {
-              const modalIsIncomplete = (selectedInspection.notCheckedCount || 0) > 0 || selectedInspection.status === 'pending';
-              const modalHasDefects = (selectedInspection.attentionCount || 0) > 0;
+              const modalPassedCount = getInspectionPassedCount(selectedInspection);
+              const modalAttentionCount = getInspectionAttentionCount(selectedInspection);
+              const modalNotCheckedCount = getInspectionPendingCount(selectedInspection);
+              const modalIsIncomplete = isAuditIncomplete(selectedInspection);
               const modalAllResolved = areAllDefectsResolved(selectedInspection);
+              const modalActiveDefects = selectedInspection.items.filter(
+                (i) => i.status === 'needs_attention' && !isItemRemediated(i, selectedInspection.id)
+              );
+              const modalRemediatedDefects = selectedInspection.items.filter(
+                (i) => i.status === 'needs_attention' && isItemRemediated(i, selectedInspection.id)
+              );
+              const modalEvaluatedCount = modalPassedCount + modalAttentionCount;
+              const historicalScore = selectedInspection.score;
+              const currentRemediatedScore =
+                modalEvaluatedCount > 0
+                  ? Math.round(((modalPassedCount + modalRemediatedDefects.length) / modalEvaluatedCount) * 100)
+                  : 0;
 
               return (
                 <>
@@ -1092,16 +1333,16 @@ export const InspectionsPage: React.FC = () => {
                         </span>
                         {modalIsIncomplete ? (
                           <Badge variant="warning" size="sm">
-                            INCOMPLETE &bull; PENDING VERIFICATION ({selectedInspection.notCheckedCount} UNCHECKED)
+                            INCOMPLETE &bull; PENDING VERIFICATION ({modalNotCheckedCount} UNCHECKED)
                           </Badge>
-                        ) : modalHasDefects ? (
+                        ) : modalAttentionCount > 0 ? (
                           modalAllResolved ? (
                             <div className="flex flex-wrap items-center gap-1.5">
                               <Badge variant="default" size="sm">
                                 AUDIT FINDING: DEFICIENCIES RECORDED
                               </Badge>
-                              <Badge variant="success" size="sm">
-                                REMEDIATION: ALL ACTIONS RESOLVED
+                              <Badge variant="success" size="sm" className="bg-emerald-100 text-emerald-800 border-emerald-300">
+                                ALL DEFICIENCIES REMEDIATED
                               </Badge>
                             </div>
                           ) : (
@@ -1110,7 +1351,7 @@ export const InspectionsPage: React.FC = () => {
                                 AUDIT FINDING: NEEDS ATTENTION
                               </Badge>
                               <Badge variant="critical" size="sm">
-                                OPEN ACTIONS PENDING
+                                {modalActiveDefects.length} ACTIVE DEFECTS
                               </Badge>
                             </div>
                           )
@@ -1126,33 +1367,42 @@ export const InspectionsPage: React.FC = () => {
                       {modalIsIncomplete && (
                         <p className="text-[11px] font-mono text-amber-800 mt-1 flex items-center gap-1">
                           <Clock className="w-3 h-3" />
-                          <span>Verification in progress: {(selectedInspection.passedCount || 0) + (selectedInspection.attentionCount || 0)} of {selectedInspection.items.length} checklist items verified.</span>
+                          <span>
+                            Verification in progress: {modalEvaluatedCount} of {selectedInspection.items.length} checklist items verified.
+                          </span>
                         </p>
                       )}
                     </div>
 
                     <div className="text-left sm:text-right flex-shrink-0">
                       <span className="text-[10px] uppercase font-mono font-bold text-brand-graphite-400 block">
-                        Compliance Score
+                        {modalAllResolved && modalAttentionCount > 0 ? 'Remediated Score' : 'Compliance Score'}
                       </span>
-                      <span
-                        className={`text-2xl font-mono font-bold ${
-                          selectedInspection.score >= 90
-                            ? 'text-emerald-700'
-                            : selectedInspection.score >= 70
-                            ? 'text-amber-700'
-                            : 'text-red-700'
-                        }`}
-                      >
-                        {selectedInspection.score}%
-                      </span>
+                      <div className="flex items-baseline sm:justify-end gap-1.5 font-mono">
+                        <span
+                          className={`text-2xl font-bold ${
+                            (modalAllResolved && modalAttentionCount > 0 ? currentRemediatedScore : historicalScore) >= 90
+                              ? 'text-emerald-700'
+                              : (modalAllResolved && modalAttentionCount > 0 ? currentRemediatedScore : historicalScore) >= 70
+                              ? 'text-amber-700'
+                              : 'text-red-700'
+                          }`}
+                        >
+                          {modalAllResolved && modalAttentionCount > 0 ? `${currentRemediatedScore}%` : `${historicalScore}%`}
+                        </span>
+                        {modalAllResolved && modalAttentionCount > 0 && (
+                          <span className="text-xs text-brand-graphite-400 line-through" title="Historical audit score">
+                            {historicalScore}%
+                          </span>
+                        )}
+                      </div>
                       <span className="text-[10px] block font-mono text-brand-graphite-500">
                         {modalIsIncomplete
-                          ? `Evaluated on ${(selectedInspection.passedCount || 0) + (selectedInspection.attentionCount || 0)} checked`
-                          : modalHasDefects && modalAllResolved
-                          ? 'Audit score (all issues closed)'
-                          : modalHasDefects
-                          ? 'Audit score (defects active)'
+                          ? `Evaluated on ${modalEvaluatedCount} of ${selectedInspection.items.length} items checked`
+                          : modalAllResolved && modalAttentionCount > 0
+                          ? `Historical audit: ${historicalScore}%`
+                          : modalAttentionCount > 0
+                          ? `${modalActiveDefects.length} active defects pending`
                           : 'Final compliance score'}
                       </span>
                     </div>
@@ -1164,22 +1414,26 @@ export const InspectionsPage: React.FC = () => {
                       <div className="flex items-start sm:items-center gap-2">
                         <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5 sm:mt-0" />
                         <span>
-                          <strong>Pending Verification:</strong> {selectedInspection.notCheckedCount} item(s) have not been checked yet. Complete the verification for each item below to finish this audit.
+                          <strong>Pending Verification:</strong> {modalNotCheckedCount} item(s) have not been checked yet. Complete the remaining items to finish this audit.
                         </span>
                       </div>
-                      {reviewItemFilter !== 'pending' && (
-                        <button
-                          type="button"
-                          onClick={() => setReviewItemFilter('pending')}
-                          className="text-xs text-amber-900 font-bold underline hover:text-brand-red flex-shrink-0 whitespace-nowrap"
-                        >
-                          View Pending Items ({selectedInspection.notCheckedCount}) &rarr;
-                        </button>
-                      )}
+                      <Button
+                        size="sm"
+                        variant="primary"
+                        icon={ClipboardCheck}
+                        onClick={() => {
+                          const cur = selectedInspection;
+                          setSelectedInspectionId(null);
+                          handleStartContinueInspection(cur);
+                        }}
+                        className="text-xs bg-amber-600 hover:bg-amber-700 text-white border-none font-medium shadow-xs"
+                      >
+                        Continue Inspection ({modalNotCheckedCount}) &rarr;
+                      </Button>
                     </div>
                   )}
 
-                  {!modalIsIncomplete && modalHasDefects && modalAllResolved && (
+                  {!modalIsIncomplete && modalAttentionCount > 0 && modalAllResolved && (
                     <div className="p-3 bg-emerald-50 border border-emerald-200 rounded flex items-center gap-2 text-xs text-emerald-950 animate-fadeIn">
                       <ShieldCheck className="w-4 h-4 text-emerald-700 flex-shrink-0" />
                       <span>
@@ -1199,15 +1453,31 @@ export const InspectionsPage: React.FC = () => {
                 </span>
                 <div className="text-[11px] font-mono text-brand-graphite-500">
                   <span className="text-emerald-700 font-bold">
-                    {selectedInspection.items.filter((i) => i.status === 'pass').length} Pass
+                    {getInspectionPassedCount(selectedInspection)} Pass
                   </span>{' '}
                   &bull;{' '}
-                  <span className="text-red-600 font-bold">
-                    {selectedInspection.items.filter((i) => i.status === 'needs_attention').length} Attention
-                  </span>{' '}
+                  {getInspectionRemediatedCount(selectedInspection) > 0 ? (
+                    <>
+                      <span className="text-emerald-700 font-bold">
+                        {getInspectionRemediatedCount(selectedInspection)} Remediated
+                      </span>
+                      {getInspectionActiveDefectsCount(selectedInspection) > 0 && (
+                        <>
+                          {' '}&bull;{' '}
+                          <span className="text-red-600 font-bold">
+                            {getInspectionActiveDefectsCount(selectedInspection)} Active Defect{getInspectionActiveDefectsCount(selectedInspection) !== 1 ? 's' : ''}
+                          </span>
+                        </>
+                      )}
+                    </>
+                  ) : (
+                    <span className="text-red-600 font-bold">
+                      {getInspectionAttentionCount(selectedInspection)} Attention
+                    </span>
+                  )}{' '}
                   &bull;{' '}
                   <span className="text-amber-600 font-bold">
-                    {selectedInspection.items.filter((i) => i.status === 'not_checked').length} Unchecked
+                    {getInspectionPendingCount(selectedInspection)} Unchecked
                   </span>
                 </div>
               </div>
@@ -1235,20 +1505,39 @@ export const InspectionsPage: React.FC = () => {
                   }`}
                 >
                   <Clock className="w-3 h-3" />
-                  <span>Pending Verification ({selectedInspection.items.filter((i) => i.status === 'not_checked').length})</span>
+                  <span>Pending Verification ({getInspectionPendingCount(selectedInspection)})</span>
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setReviewItemFilter('needs_attention')}
-                  className={`px-2.5 py-1 rounded transition-colors text-[11px] font-semibold flex items-center gap-1 ${
-                    reviewItemFilter === 'needs_attention'
-                      ? 'bg-brand-red text-white'
-                      : 'text-brand-red hover:bg-red-50'
-                  }`}
-                >
-                  <AlertTriangle className="w-3 h-3" />
-                  <span>Deficiencies ({selectedInspection.items.filter((i) => i.status === 'needs_attention').length})</span>
-                </button>
+
+                {getInspectionActiveDefectsCount(selectedInspection) > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setReviewItemFilter('active_defects')}
+                    className={`px-2.5 py-1 rounded transition-colors text-[11px] font-semibold flex items-center gap-1 ${
+                      reviewItemFilter === 'active_defects'
+                        ? 'bg-brand-red text-white'
+                        : 'text-brand-red hover:bg-red-50'
+                    }`}
+                  >
+                    <AlertTriangle className="w-3 h-3" />
+                    <span>Active Deficiencies ({getInspectionActiveDefectsCount(selectedInspection)})</span>
+                  </button>
+                )}
+
+                {getInspectionRemediatedCount(selectedInspection) > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setReviewItemFilter('remediated')}
+                    className={`px-2.5 py-1 rounded transition-colors text-[11px] font-semibold flex items-center gap-1 ${
+                      reviewItemFilter === 'remediated'
+                        ? 'bg-emerald-700 text-white'
+                        : 'text-emerald-700 hover:bg-emerald-50'
+                    }`}
+                  >
+                    <ShieldCheck className="w-3 h-3" />
+                    <span>Remediated ({getInspectionRemediatedCount(selectedInspection)})</span>
+                  </button>
+                )}
+
                 <button
                   type="button"
                   onClick={() => setReviewItemFilter('pass')}
@@ -1259,7 +1548,7 @@ export const InspectionsPage: React.FC = () => {
                   }`}
                 >
                   <CheckCircle2 className="w-3 h-3" />
-                  <span>Passed ({selectedInspection.items.filter((i) => i.status === 'pass').length})</span>
+                  <span>Passed ({getInspectionPassedCount(selectedInspection)})</span>
                 </button>
               </div>
 
@@ -1267,18 +1556,15 @@ export const InspectionsPage: React.FC = () => {
               <div className="divide-y divide-brand-border border border-brand-border rounded max-h-[55vh] overflow-y-auto">
                 {reviewItems.length === 0 ? (
                   <div className="p-8 text-center text-xs text-brand-graphite-500 bg-brand-graphite-50/50">
-                    No items in this inspection match the &quot;{reviewItemFilter.replace('_', ' ')}&quot; filter.
+                    No items in this inspection match the current filter.
                   </div>
                 ) : (
                   reviewItems.map((item) => {
                     const originalIdx = selectedInspection.items.findIndex((i) => i.id === item.id);
-                    // Check if a linked corrective action exists in the data model
-                    const linkedAction = issues.find(
-                      (iss) =>
-                        (item.linkedIssueId && iss.id === item.linkedIssueId) ||
-                        (iss.sourceId === selectedInspection.id &&
-                          (iss.checklistItemId === item.id || iss.title.includes(item.label)))
-                    );
+                    const linkedAction = getLinkedIssue(item, selectedInspection.id);
+                    const isVerified = linkedAction && (linkedAction.status === 'verified' || (linkedAction.status === 'resolved' && !!linkedAction.verificationNote));
+                    const isResolved = linkedAction && linkedAction.status === 'resolved' && !linkedAction.verificationNote;
+                    const isInProgress = linkedAction && linkedAction.status === 'in_progress';
 
                     return (
                       <div key={item.id} className="p-3.5 text-xs hover:bg-brand-graphite-50/40 transition-colors">
@@ -1359,10 +1645,12 @@ export const InspectionsPage: React.FC = () => {
                                 {linkedAction ? (
                                   <div
                                     className={`p-2.5 rounded border space-y-1.5 ${
-                                      linkedAction.status === 'resolved'
+                                      isVerified
                                         ? 'bg-emerald-50/80 border-emerald-300'
-                                        : linkedAction.status === 'in_progress'
+                                        : isResolved
                                         ? 'bg-amber-50/80 border-amber-300'
+                                        : isInProgress
+                                        ? 'bg-blue-50/80 border-blue-300'
                                         : 'bg-red-50/80 border-red-300'
                                     }`}
                                   >
@@ -1370,9 +1658,7 @@ export const InspectionsPage: React.FC = () => {
                                       <div className="flex items-center gap-1.5 text-[11px] font-medium text-brand-graphite-900">
                                         <ShieldCheck
                                           className={`w-3.5 h-3.5 flex-shrink-0 ${
-                                            linkedAction.status === 'resolved'
-                                              ? 'text-emerald-700'
-                                              : 'text-brand-red'
+                                            isVerified ? 'text-emerald-700' : isResolved ? 'text-amber-700' : 'text-brand-red'
                                           }`}
                                         />
                                         <span>
@@ -1380,31 +1666,54 @@ export const InspectionsPage: React.FC = () => {
                                           <strong>{linkedAction.assignedToName}</strong>
                                         </span>
                                       </div>
-                                      <Badge
-                                        variant={
-                                          linkedAction.status === 'resolved'
-                                            ? 'success'
-                                            : linkedAction.status === 'in_progress'
-                                            ? 'warning'
-                                            : 'critical'
-                                        }
-                                        size="sm"
-                                      >
-                                        {linkedAction.status === 'resolved'
-                                          ? 'REMEDIATION: RESOLVED'
-                                          : `ACTION: ${(linkedAction.status || 'open').replace('_', ' ').toUpperCase()}`}
-                                      </Badge>
+                                      <div className="flex items-center gap-2">
+                                        <Badge
+                                          variant={isVerified ? 'success' : isResolved ? 'warning' : isInProgress ? 'warning' : 'critical'}
+                                          size="sm"
+                                        >
+                                          {isVerified
+                                            ? 'STATUS: VERIFIED & CLOSED'
+                                            : isResolved
+                                            ? 'STATUS: RESOLVED (AWAITING SIGN-OFF)'
+                                            : `ACTION: ${(linkedAction.status || 'open').replace('_', ' ').toUpperCase()}`}
+                                        </Badge>
+                                        {/* Inline Administrator Sign-Off Button */}
+                                        {(isResolved || linkedAction.status === 'resolved') && !isVerified && (isAdmin || user?.role === 'safety_officer') && (
+                                          <button
+                                            type="button"
+                                            onClick={() => handleOpenVerifyModal(selectedInspection, item, linkedAction)}
+                                            className="px-2.5 py-1 text-[11px] font-bold rounded bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs transition-colors flex items-center gap-1"
+                                          >
+                                            <Check className="w-3 h-3" />
+                                            <span>Verify & Sign Off</span>
+                                          </button>
+                                        )}
+                                      </div>
                                     </div>
-                                    {linkedAction.status === 'resolved' && linkedAction.resolutionNote && (
-                                      <div className="text-[11px] text-emerald-900 bg-white/80 p-2 rounded border border-emerald-200">
-                                        <span className="font-bold">Verified Remediation:</span>{' '}
+
+                                    {/* Resolution note from worker */}
+                                    {linkedAction.resolutionNote && (
+                                      <div className="text-[11px] text-brand-graphite-800 bg-white/80 p-2 rounded border border-brand-border">
+                                        <span className="font-bold text-brand-graphite-900">Remediation Completed:</span>{' '}
                                         {linkedAction.resolutionNote}
                                         {linkedAction.resolvedBy && (
+                                          <span className="block text-[10px] text-brand-graphite-500 font-mono mt-0.5">
+                                            Submitted by {linkedAction.resolvedBy} on{' '}
+                                            {linkedAction.resolvedAt ? formatDateString(linkedAction.resolvedAt) : 'Recently'}
+                                          </span>
+                                        )}
+                                      </div>
+                                    )}
+
+                                    {/* Verification note from safety officer */}
+                                    {isVerified && (
+                                      <div className="text-[11px] text-emerald-950 bg-emerald-100/60 p-2 rounded border border-emerald-300">
+                                        <span className="font-bold text-emerald-900">Official Verification & Sign-off:</span>{' '}
+                                        {linkedAction.verificationNote || 'Remediation inspected on site and verified operational.'}
+                                        {linkedAction.verifiedBy && (
                                           <span className="block text-[10px] text-emerald-800 font-mono mt-0.5">
-                                            Signed off by {linkedAction.resolvedBy} on{' '}
-                                            {linkedAction.resolvedAt
-                                              ? formatDateString(linkedAction.resolvedAt)
-                                              : 'Recently'}
+                                            Signed off by {linkedAction.verifiedBy} on{' '}
+                                            {linkedAction.verifiedAt ? formatDateString(linkedAction.verifiedAt) : 'Recently'}
                                           </span>
                                         )}
                                       </div>
@@ -1431,23 +1740,39 @@ export const InspectionsPage: React.FC = () => {
                           </div>
 
                           {/* Status Badge */}
-                          <div className="flex-shrink-0">
-                            <Badge
-                              variant={
-                                item.status === 'pass'
-                                  ? 'success'
-                                  : item.status === 'needs_attention'
-                                  ? 'critical'
-                                  : 'warning'
-                              }
-                              size="sm"
-                            >
-                              {item.status === 'pass'
-                                ? 'PASS'
-                                : item.status === 'needs_attention'
-                                ? 'ATTENTION'
-                                : 'NOT CHECKED'}
-                            </Badge>
+                          <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                            {item.status === 'pass' ? (
+                              <Badge variant="success" size="sm">
+                                PASS
+                              </Badge>
+                            ) : item.status === 'not_checked' ? (
+                              <Badge variant="warning" size="sm">
+                                NOT CHECKED
+                              </Badge>
+                            ) : isVerified ? (
+                              <Badge variant="success" size="sm" className="bg-emerald-100 text-emerald-800 border-emerald-300 font-bold">
+                                <CheckCircle2 className="w-3 h-3 mr-1 inline" />
+                                RESOLVED & VERIFIED
+                              </Badge>
+                            ) : isResolved ? (
+                              <Badge variant="warning" size="sm" className="bg-amber-100 text-amber-900 border-amber-300 font-semibold">
+                                <Clock className="w-3 h-3 mr-1 inline" />
+                                AWAITING VERIFICATION
+                              </Badge>
+                            ) : isInProgress ? (
+                              <Badge variant="warning" size="sm" className="bg-blue-100 text-blue-900 border-blue-300 font-semibold">
+                                IN PROGRESS
+                              </Badge>
+                            ) : (
+                              <Badge variant="critical" size="sm">
+                                ATTENTION
+                              </Badge>
+                            )}
+                            {item.status === 'needs_attention' && (
+                              <span className="text-[10px] font-mono text-brand-graphite-400">
+                                Audit Finding: Defect
+                              </span>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -1462,9 +1787,26 @@ export const InspectionsPage: React.FC = () => {
               <span className="text-xs font-mono text-brand-graphite-400">
                 Audit Record ID: {selectedInspection.id}
               </span>
-              <Button size="sm" variant="outline" onClick={() => setSelectedInspectionId(null)}>
-                Close Audit View
-              </Button>
+              <div className="flex items-center gap-2">
+                {isAuditIncomplete(selectedInspection) && (
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    icon={ClipboardCheck}
+                    onClick={() => {
+                      const cur = selectedInspection;
+                      setSelectedInspectionId(null);
+                      handleStartContinueInspection(cur);
+                    }}
+                    className="bg-amber-600 hover:bg-amber-700 text-white border-none text-xs"
+                  >
+                    Continue Inspection ({getInspectionPendingCount(selectedInspection)} unchecked)
+                  </Button>
+                )}
+                <Button size="sm" variant="outline" onClick={() => setSelectedInspectionId(null)}>
+                  Close Audit View
+                </Button>
+              </div>
             </div>
           </div>
         </Modal>
@@ -1567,6 +1909,297 @@ export const InspectionsPage: React.FC = () => {
               </Button>
               <Button type="submit" variant="primary" size="sm" icon={ShieldCheck}>
                 {createTicketImmediately ? 'Assign & Create Action' : 'Save Deficiency Finding'}
+              </Button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* 7. Continue Inspection Runner Modal */}
+      {continueModalInspection && (
+        <Modal
+          isOpen={!!continueModalInspection}
+          onClose={() => setContinueModalInspection(null)}
+          title={`Continue Inspection: ${continueModalInspection.buildingName}`}
+          description={`Resume verification for ${continueModalInspection.floorLabel || 'Full Facility'} &bull; Started by ${continueModalInspection.inspectorName} on ${formatDateString(continueModalInspection.date)}`}
+          maxWidth="2xl"
+        >
+          <div className="space-y-4">
+            {/* Verification Progress Tracker */}
+            <div className="p-3 bg-brand-graphite-50 rounded border border-brand-border flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+              <div>
+                <span className="font-semibold text-brand-graphite-900 block">
+                  Checklist Verification Progress
+                </span>
+                <span className="text-brand-graphite-500 font-mono text-[11px]">
+                  {continueChecklist.filter((i) => i.status !== 'not_checked').length} of {continueChecklist.length} items checked
+                </span>
+              </div>
+              <div className="flex items-center gap-2 font-mono text-xs">
+                <span className="text-emerald-700 font-bold">
+                  {continueChecklist.filter((i) => i.status === 'pass').length} Pass
+                </span>
+                <span>&bull;</span>
+                <span className="text-brand-red font-bold">
+                  {continueChecklist.filter((i) => i.status === 'needs_attention').length} Attention
+                </span>
+                <span>&bull;</span>
+                <span className="text-amber-700 font-bold">
+                  {continueChecklist.filter((i) => i.status === 'not_checked').length} Unchecked
+                </span>
+              </div>
+            </div>
+
+            {/* Checklist Items */}
+            <div className="space-y-3 divide-y divide-brand-border border border-brand-border rounded p-3 bg-white max-h-[50vh] overflow-y-auto">
+              {continueChecklist.map((item, idx) => {
+                const actionCfg = continueActionConfigs[item.id];
+                const alreadyLinked = !!item.linkedIssueId;
+
+                return (
+                  <div key={item.id} className={`${idx !== 0 ? 'pt-3' : ''}`}>
+                    <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2">
+                      <div className="flex-1">
+                        <span className="text-xs font-semibold text-brand-graphite-900 leading-snug block">
+                          {idx + 1}. {item.label}
+                        </span>
+                        <span className="text-[10px] font-mono text-brand-graphite-500 uppercase mt-0.5 block">
+                          Domain: {(item.category || 'general_safety').replace(/_/g, ' ')}
+                        </span>
+                      </div>
+
+                      {/* 3 Status Radios */}
+                      <div className="flex items-center gap-1 flex-shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => handleContinueStatusChange(item.id, 'pass')}
+                          className={`px-2.5 py-1 text-[11px] font-bold rounded transition-colors flex items-center gap-1 ${
+                            item.status === 'pass'
+                              ? 'bg-emerald-600 text-white shadow-xs'
+                              : 'bg-white border border-brand-border text-brand-graphite-600 hover:bg-emerald-50'
+                          }`}
+                        >
+                          <Check className="w-3 h-3" />
+                          <span>Pass</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleContinueStatusChange(item.id, 'needs_attention')}
+                          className={`px-2.5 py-1 text-[11px] font-bold rounded transition-colors flex items-center gap-1 ${
+                            item.status === 'needs_attention'
+                              ? 'bg-brand-red text-white shadow-xs'
+                              : 'bg-white border border-brand-border text-brand-graphite-600 hover:bg-red-50'
+                          }`}
+                        >
+                          <AlertTriangle className="w-3 h-3" />
+                          <span>Needs Attention</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleContinueStatusChange(item.id, 'not_checked')}
+                          className={`px-2.5 py-1 text-[11px] font-bold rounded transition-colors ${
+                            item.status === 'not_checked'
+                              ? 'bg-brand-graphite-800 text-white shadow-xs'
+                              : 'bg-white border border-brand-border text-brand-graphite-500 hover:bg-brand-graphite-100'
+                          }`}
+                        >
+                          Not Checked
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Defect Observation & Action Config */}
+                    {item.status === 'needs_attention' && (
+                      <div className="mt-2.5 p-3 bg-red-50/70 border border-red-200 rounded space-y-2.5 animate-fadeIn">
+                        <div>
+                          <label className="text-[11px] font-bold text-red-950 block mb-1">
+                            Deficiency Observation & Finding Notes:
+                          </label>
+                          <input
+                            type="text"
+                            placeholder="Detail observation..."
+                            value={item.notes || ''}
+                            onChange={(e) => handleContinueItemNoteChange(item.id, e.target.value)}
+                            className="w-full text-xs p-1.5 rounded border border-red-300 bg-white text-brand-graphite-900 focus:outline-none focus:border-brand-red"
+                          />
+                        </div>
+
+                        {!alreadyLinked && (
+                          <div className="pt-2 border-t border-red-200/60">
+                            <label className="flex items-center gap-2 text-xs font-semibold text-red-900 cursor-pointer mb-2">
+                              <input
+                                type="checkbox"
+                                checked={!!actionCfg?.enabled}
+                                onChange={(e) => handleContinueActionToggle(item.id, e.target.checked)}
+                                className="rounded text-brand-red focus:ring-brand-red w-4 h-4"
+                              />
+                              <span>Create Corrective Action ticket for this deficiency</span>
+                            </label>
+
+                            {actionCfg?.enabled && (
+                              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 bg-white/80 p-2.5 rounded border border-red-200 text-xs">
+                                <div>
+                                  <label className="block text-[10px] font-mono text-brand-graphite-600 uppercase mb-0.5">
+                                    Priority
+                                  </label>
+                                  <select
+                                    value={actionCfg.priority}
+                                    onChange={(e) =>
+                                      handleContinueActionConfigChange(item.id, 'priority', e.target.value)
+                                    }
+                                    className="w-full text-xs p-1 border border-brand-border rounded bg-white"
+                                  >
+                                    <option value="high">High</option>
+                                    <option value="medium">Medium</option>
+                                    <option value="low">Low</option>
+                                    <option value="critical">Critical</option>
+                                  </select>
+                                </div>
+                                <div>
+                                  <label className="block text-[10px] font-mono text-brand-graphite-600 uppercase mb-0.5">
+                                    Assignee
+                                  </label>
+                                  <select
+                                    value={actionCfg.assignedStaffId}
+                                    onChange={(e) =>
+                                      handleContinueActionConfigChange(item.id, 'assignedStaffId', e.target.value)
+                                    }
+                                    className="w-full text-xs p-1 border border-brand-border rounded bg-white"
+                                  >
+                                    {staff.map((s) => (
+                                      <option key={s.id} value={s.id}>
+                                        {s.name} ({s.emergencyRole})
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+                                <div>
+                                  <label className="block text-[10px] font-mono text-brand-graphite-600 uppercase mb-0.5">
+                                    Due Date
+                                  </label>
+                                  <input
+                                    type="date"
+                                    value={actionCfg.dueDate}
+                                    onChange={(e) =>
+                                      handleContinueActionConfigChange(item.id, 'dueDate', e.target.value)
+                                    }
+                                    className="w-full text-xs p-1 border border-brand-border rounded bg-white"
+                                  />
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Overall Inspector Notes */}
+            <div>
+              <label className="block text-xs font-semibold text-brand-graphite-700 uppercase tracking-wider mb-1 font-mono">
+                Overall Audit Summary Notes
+              </label>
+              <textarea
+                rows={2}
+                value={continueNotes}
+                onChange={(e) => setContinueNotes(e.target.value)}
+                className="w-full text-xs p-2 rounded border border-brand-border bg-white text-brand-graphite-900 focus:outline-none focus:border-brand-red font-sans"
+              />
+            </div>
+
+            {/* Modal Actions */}
+            <div className="pt-3 border-t border-brand-border flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setContinueModalInspection(null)}
+              >
+                Cancel
+              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleSaveContinueProgress(false)}
+                >
+                  Save Progress (Draft / In-Progress)
+                </Button>
+                <Button
+                  type="button"
+                  variant="primary"
+                  size="sm"
+                  icon={ClipboardCheck}
+                  onClick={() => handleSaveContinueProgress(true)}
+                >
+                  Complete & Finalize Inspection
+                </Button>
+              </div>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* 8. Inline Administrator Verification Sign-Off Modal */}
+      {verifyModalAction && (
+        <Modal
+          isOpen={!!verifyModalAction}
+          onClose={() => setVerifyModalAction(null)}
+          title={`Verify Remediation: ${verifyModalAction.issue.code}`}
+          description={`Sign off on verified corrective repair for "${verifyModalAction.item.label}"`}
+          maxWidth="md"
+        >
+          <form onSubmit={handleConfirmVerifyAction} className="space-y-3.5">
+            <div className="p-3 bg-brand-graphite-50 rounded border border-brand-border space-y-1.5 text-xs">
+              <div>
+                <span className="font-mono text-brand-graphite-500 uppercase text-[10px] block">Facility</span>
+                <span className="font-semibold text-brand-graphite-900">
+                  {verifyModalAction.inspection.buildingName} ({verifyModalAction.inspection.floorLabel || 'General'})
+                </span>
+              </div>
+              <div>
+                <span className="font-mono text-brand-graphite-500 uppercase text-[10px] block">Defect</span>
+                <span className="text-brand-graphite-800">{verifyModalAction.item.label}</span>
+              </div>
+              {verifyModalAction.issue.resolutionNote && (
+                <div className="pt-1.5 border-t border-brand-border">
+                  <span className="font-mono text-brand-graphite-500 uppercase text-[10px] block">Worker Resolution Report</span>
+                  <p className="text-brand-graphite-900 italic font-sans">{verifyModalAction.issue.resolutionNote}</p>
+                </div>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-brand-graphite-700 uppercase tracking-wider mb-1 font-mono">
+                Administrator Sign-Off & Verification Note
+              </label>
+              <textarea
+                rows={3}
+                value={verifyNote}
+                onChange={(e) => setVerifyNote(e.target.value)}
+                required
+                placeholder="Detail physical inspection observations, compliance confirmation, and approval..."
+                className="w-full text-xs p-2 rounded border border-brand-border bg-white text-brand-graphite-900 focus:outline-none focus:border-brand-red font-sans"
+              />
+            </div>
+
+            <div className="pt-3 border-t border-brand-border flex justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setVerifyModalAction(null)}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" variant="primary" size="sm" icon={ShieldCheck}>
+                Sign Off & Close Remediation
               </Button>
             </div>
           </form>
