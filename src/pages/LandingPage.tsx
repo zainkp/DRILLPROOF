@@ -24,10 +24,14 @@ import {
 } from 'lucide-react';
 import { BrandLogo } from '../components/common/BrandLogo';
 import { Button } from '../components/ui/Button';
+// @ts-expect-error LiveDrill is a .jsx component
+import LiveDrill from '../components/common/LiveDrill';
+import { OperationalLoop } from '../components/landing/OperationalLoop';
+import { SupportedEnvironments } from '../components/landing/SupportedEnvironments';
+import { ClosingCta } from '../components/landing/ClosingCta';
 
 export const LandingPage: React.FC = () => {
   const { user } = useData();
-  const [activeWorkflowStep, setActiveWorkflowStep] = useState(0);
 
   const workflowSteps = [
     {
@@ -183,182 +187,16 @@ export const LandingPage: React.FC = () => {
               </div>
             </div>
 
-            {/* Right Column: Architectural Blueprint & Readiness Visual (5 cols) */}
+            {/* Right Column: Live evacuation drill (5 cols) */}
             <div className="lg:col-span-5 relative">
-              <div className="bg-brand-graphite-950 text-white rounded border border-brand-graphite-800 shadow-elevated p-6 relative overflow-hidden bg-tech-grid-dark">
-                {/* Visual Header */}
-                <div className="flex items-center justify-between border-b border-brand-graphite-800 pb-3 mb-4">
-                  <div className="flex items-center gap-2">
-                    <span className="w-2.5 h-2.5 rounded-full bg-brand-red animate-pulse" />
-                    <span className="font-mono text-xs font-bold text-white tracking-wider">
-                      SCHEMATIC: NORTHSTAR ACADEMIC
-                    </span>
-                  </div>
-                  <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950/60 px-2 py-0.5 rounded border border-emerald-800">
-                    READINESS: 84%
-                  </span>
-                </div>
-
-                {/* Architectural Blueprint Diagram (SVG Floor Plan Schematic) */}
-                <div className="relative border border-brand-graphite-800 rounded bg-brand-graphite-900/90 p-4 mb-4">
-                  <svg
-                    viewBox="0 0 340 220"
-                    fill="none"
-                    xmlns="http://www.w3.org/2000/svg"
-                    className="w-full h-auto text-brand-graphite-400"
-                  >
-                    {/* Architectural Grid Lines */}
-                    <line x1="10" y1="10" x2="330" y2="10" stroke="#2C2E33" strokeDasharray="3 3" />
-                    <line x1="10" y1="110" x2="330" y2="110" stroke="#2C2E33" strokeDasharray="3 3" />
-                    <line x1="10" y1="210" x2="330" y2="210" stroke="#2C2E33" strokeDasharray="3 3" />
-                    <line x1="170" y1="10" x2="170" y2="210" stroke="#2C2E33" strokeDasharray="3 3" />
-
-                    {/* Structural Boundary Walls */}
-                    <rect x="20" y="20" width="300" height="180" rx="3" stroke="#4A4D53" strokeWidth="2" fill="none" />
-
-                    {/* Interior Zones */}
-                    {/* Zone West: CS Laboratories */}
-                    <rect x="25" y="25" width="135" height="80" fill="#202124" stroke="#323438" />
-                    <text x="35" y="45" fill="#8C909A" fontSize="9" fontFamily="monospace" fontWeight="bold">ZONE W1: IT LABS</text>
-                    <text x="35" y="60" fill="#DFE1E5" fontSize="8" fontFamily="sans-serif">Level 1 Workstations</text>
-
-                    {/* West Stairwell & Egress Route */}
-                    <rect x="25" y="115" width="60" height="80" fill="#2A1B1D" stroke="#E51C23" strokeWidth="1.5" />
-                    <text x="32" y="135" fill="#FDE8E9" fontSize="8" fontFamily="monospace" fontWeight="bold">WEST STAIR</text>
-                    <path d="M 45 150 L 65 170 M 65 170 L 55 170 M 65 170 L 65 160" stroke="#E51C23" strokeWidth="2" />
-                    <circle cx="75" cy="180" r="3" fill="#E51C23" />
-                    <text x="30" y="190" fill="#F87171" fontSize="7" fontFamily="sans-serif">40% Door Swing Clear</text>
-
-                    {/* Zone Central: Main Egress Atrium */}
-                    <rect x="95" y="115" width="135" height="80" fill="#1A2421" stroke="#10B981" strokeWidth="1.5" />
-                    <text x="105" y="135" fill="#A7F3D0" fontSize="9" fontFamily="monospace" fontWeight="bold">CENTRAL ATRIUM</text>
-                    <text x="105" y="150" fill="#D1FAE5" fontSize="8" fontFamily="sans-serif">Primary Evacuation Path</text>
-                    <path d="M 160 160 L 160 195 M 160 195 L 155 187 M 160 195 L 165 187" stroke="#10B981" strokeWidth="2.5" />
-
-                    {/* Zone East: Lecture Halls & North Egress */}
-                    <rect x="170" y="25" width="145" height="80" fill="#202124" stroke="#323438" />
-                    <text x="180" y="45" fill="#8C909A" fontSize="9" fontFamily="monospace" fontWeight="bold">ZONE E1: LECTURE HALLS</text>
-                    <text x="180" y="60" fill="#DFE1E5" fontSize="8" fontFamily="sans-serif">Capacity: 450 Occupants</text>
-
-                    {/* East Pressurized Stairwell */}
-                    <rect x="240" y="115" width="75" height="80" fill="#172228" stroke="#0284C7" strokeWidth="1.5" />
-                    <text x="248" y="135" fill="#BAE6FD" fontSize="8" fontFamily="monospace" fontWeight="bold">EAST STAIR</text>
-                    <text x="248" y="150" fill="#7DD3FC" fontSize="7" fontFamily="sans-serif">Pressurized Egress</text>
-
-                    {/* Safety Equipment Pinpoints */}
-                    <circle cx="150" cy="55" r="4" fill="#F47721" />
-                    <text x="157" y="58" fill="#FDBA74" fontSize="7" fontFamily="monospace">EXT-01</text>
-
-                    <circle cx="115" cy="170" r="4" fill="#10B981" />
-                    <text x="122" y="173" fill="#6EE7B7" fontSize="7" fontFamily="monospace">AED-G</text>
-                  </svg>
-                </div>
-
-                {/* Live Drill Telemetry Bar */}
-                <div className="grid grid-cols-2 gap-3 text-xs font-mono">
-                  <div className="p-2.5 rounded bg-brand-graphite-900 border border-brand-graphite-800">
-                    <span className="text-[10px] text-brand-graphite-400 block uppercase">
-                      Timed Evacuation
-                    </span>
-                    <span className="text-white font-bold text-sm">04:37 / 05:00</span>
-                    <span className="text-[10px] text-emerald-400 block mt-0.5">&bull; Target Met</span>
-                  </div>
-
-                  <div className="p-2.5 rounded bg-brand-graphite-900 border border-brand-graphite-800">
-                    <span className="text-[10px] text-brand-graphite-400 block uppercase">
-                      Assembly Point A
-                    </span>
-                    <span className="text-white font-bold text-sm">828 / 840</span>
-                    <span className="text-[10px] text-brand-orange block mt-0.5">&bull; 98.5% Accounted</span>
-                  </div>
-                </div>
-
-                <div className="mt-3 text-[11px] text-brand-graphite-400 flex items-center justify-between border-t border-brand-graphite-800/80 pt-2.5">
-                  <span>Incident Type: Fire & Smoke Evacuation</span>
-                  <Link
-                    to="/building/academic-block"
-                    target="_blank"
-                    className="text-brand-red hover:underline flex items-center gap-1 font-semibold"
-                  >
-                    <span>View Public QR Page</span>
-                    <ArrowRight className="w-3 h-3" />
-                  </Link>
-                </div>
-              </div>
+              <LiveDrill />
             </div>
           </div>
         </div>
       </section>
 
-      {/* 2. THE PREPAREDNESS CYCLE — PLAN -> INSPECT -> PRACTISE -> IMPROVE */}
-      <section className="py-20 lg:py-28 px-4 sm:px-6 lg:px-8 bg-brand-canvas border-b border-brand-border">
-        <div className="max-w-7xl mx-auto">
-          {/* Section Editorial Header */}
-          <div className="max-w-3xl mb-14">
-            <span className="text-xs font-bold uppercase tracking-widest text-brand-red font-mono">
-              The Operational Loop
-            </span>
-            <h2 className="text-2xl sm:text-4xl font-extrabold text-brand-graphite-950 tracking-tight mt-2">
-              Plan &bull; Inspect &bull; Practise &bull; Improve
-            </h2>
-            <p className="mt-3 text-sm sm:text-base text-brand-graphite-600 leading-relaxed">
-              Real institutional safety is not a static PDF file stored in an office binder. It is an active operational rhythm that identifies physical bottlenecks before emergencies occur.
-            </p>
-          </div>
-
-          {/* Interactive Editorial Process Stream */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-            {workflowSteps.map((step, idx) => {
-              const isSelected = activeWorkflowStep === idx;
-              return (
-                <div
-                  key={step.num}
-                  onClick={() => setActiveWorkflowStep(idx)}
-                  className={`cursor-pointer transition-all duration-200 border rounded p-6 flex flex-col justify-between ${
-                    isSelected
-                      ? 'bg-white border-brand-red shadow-card ring-1 ring-brand-red'
-                      : 'bg-white/70 border-brand-border hover:bg-white hover:border-brand-graphite-400'
-                  }`}
-                >
-                  <div>
-                    <div className="flex items-center justify-between mb-4">
-                      <span
-                        className={`font-mono text-xs font-extrabold px-2 py-0.5 rounded ${
-                          isSelected
-                            ? 'bg-brand-red text-white'
-                            : 'bg-brand-graphite-100 text-brand-graphite-700'
-                        }`}
-                      >
-                        STAGE {step.num}
-                      </span>
-                      <span className="font-mono text-xs font-bold text-brand-graphite-400 uppercase">
-                        {step.title}
-                      </span>
-                    </div>
-
-                    <h3 className="text-lg font-bold text-brand-graphite-900 tracking-tight mb-2">
-                      {step.subtitle}
-                    </h3>
-
-                    <p className="text-xs text-brand-graphite-600 leading-relaxed mb-4">
-                      {step.description}
-                    </p>
-                  </div>
-
-                  <div className="pt-4 border-t border-brand-border/70 text-xs">
-                    <span className="text-[10px] uppercase font-mono font-bold text-brand-graphite-400 block mb-0.5">
-                      Deliverable:
-                    </span>
-                    <span className="font-semibold text-brand-graphite-800 text-[11px] block">
-                      {step.deliverable}
-                    </span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </section>
+      {/* 2. THE OPERATIONAL LOOP */}
+      <OperationalLoop workflowSteps={workflowSteps} />
 
       {/* 3. CORE PRODUCT CAPABILITIES — ASYMMETRIC 4-PILLAR SHOWCASE */}
       <section className="py-20 lg:py-28 px-4 sm:px-6 lg:px-8 bg-white border-b border-brand-border">
@@ -539,112 +377,11 @@ export const LandingPage: React.FC = () => {
         </div>
       </section>
 
-      {/* 4. SUPPORTED ENVIRONMENTS — EDUCATION, WORKPLACES, HEALTHCARE & INDUSTRY */}
-      <section className="py-20 lg:py-28 px-4 sm:px-6 lg:px-8 bg-brand-canvas border-b border-brand-border">
-        <div className="max-w-7xl mx-auto">
-          <div className="max-w-3xl mb-14">
-            <span className="text-xs font-bold uppercase tracking-widest text-brand-red font-mono">
-              Supported Environments
-            </span>
-            <h2 className="text-2xl sm:text-4xl font-extrabold text-brand-graphite-950 tracking-tight mt-2">
-              Engineered for Multi-Occupant Facilities
-            </h2>
-            <p className="mt-3 text-sm sm:text-base text-brand-graphite-600 leading-relaxed">
-              Every facility type faces distinct physical bottlenecks and occupant dynamics. DRILLPROOF adapts protocols and floor rosters to your operational environment.
-            </p>
-          </div>
+      {/* 4. SUPPORTED ENVIRONMENTS */}
+      <SupportedEnvironments environments={environments} />
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {environments.map((env) => (
-              <div
-                key={env.sector}
-                className="bg-white border border-brand-border rounded p-8 shadow-xs flex flex-col justify-between hover:border-brand-graphite-400 transition-colors"
-              >
-                <div>
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="text-xs font-bold uppercase font-mono text-brand-red bg-brand-red/10 px-2.5 py-0.5 rounded">
-                      {env.sector}
-                    </span>
-                    <span className="text-[11px] font-mono text-brand-graphite-500">
-                      Multi-Hazard Protocol
-                    </span>
-                  </div>
-
-                  <h3 className="text-xl font-bold text-brand-graphite-900 tracking-tight mb-2">
-                    {env.headline}
-                  </h3>
-
-                  <p className="text-xs text-brand-graphite-600 leading-relaxed mb-4">
-                    {env.context}
-                  </p>
-                </div>
-
-                <div className="pt-4 border-t border-brand-border space-y-2 text-xs">
-                  <div>
-                    <span className="text-[10px] uppercase font-mono font-bold text-brand-graphite-400 block">
-                      Target Hazards:
-                    </span>
-                    <span className="font-semibold text-brand-graphite-800 text-[11px]">
-                      {env.hazards}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-[10px] uppercase font-mono font-bold text-brand-graphite-400 block">
-                      Operational Focus:
-                    </span>
-                    <span className="text-brand-graphite-600 text-[11px]">
-                      {env.operationalFocus}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* 5. STRONG CLOSING CALL TO ACTION — ARCHITECTURAL COMMAND CALLOUT */}
-      <section className="py-20 lg:py-24 px-4 sm:px-6 lg:px-8 bg-brand-graphite-950 text-white bg-tech-grid-dark border-b border-brand-graphite-800">
-        <div className="max-w-4xl mx-auto text-center">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded bg-brand-graphite-900 border border-brand-graphite-700 text-xs font-mono text-brand-graphite-300 mb-6">
-            <span>READY FOR DEPLOYMENT</span>
-            <span className="text-brand-red">&bull;</span>
-            <span className="text-white font-bold">PREPARED. PROVEN.</span>
-          </div>
-
-          <h2 className="text-3xl sm:text-5xl font-extrabold tracking-tight leading-tight">
-            Turn your institution's emergency plans into verified operational readiness.
-          </h2>
-
-          <p className="mt-4 text-sm sm:text-base text-brand-graphite-300 max-w-2xl mx-auto leading-relaxed">
-            Review live campus facility readiness scores, launch a timed mock evacuation drill, or audit safety assets in the Northstar Campus management system.
-          </p>
-
-          <div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-3">
-            <Link to={user ? "/dashboard" : "/login"}>
-              <Button size="lg" variant="primary" icon={ArrowRight} iconPosition="right">
-                Explore the Platform
-              </Button>
-            </Link>
-
-            <Link to="/login">
-              <Button size="lg" variant="secondary" className="border-brand-graphite-700">
-                Administrator Login
-              </Button>
-            </Link>
-
-            <Link to="/building/academic-block" target="_blank" rel="noopener noreferrer">
-              <Button size="lg" variant="outline" className="text-brand-graphite-900 bg-white">
-                Inspect Public Building QR Plan
-              </Button>
-            </Link>
-          </div>
-
-          <p className="mt-6 text-xs text-brand-graphite-500 font-mono">
-            Interactive Prototype &bull; Seeded with fictional Northstar Institute Campus data
-          </p>
-        </div>
-      </section>
+      {/* 5. CLOSING CALL TO ACTION */}
+      <ClosingCta user={user} />
     </div>
   );
 };
