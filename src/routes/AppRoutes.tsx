@@ -46,6 +46,7 @@ export const AppRoutes: React.FC = () => {
       </Route>
 
       {/* Public Mobile-Friendly Building Emergency Pages (stand-alone high-contrast layout) */}
+      <Route path="/building" element={<Navigate to="/building/academic-block" replace />} />
       <Route path="/building/:slug" element={<PublicBuildingPage />} />
       <Route path="/emergency/:buildingId" element={<PublicBuildingPage />} />
 

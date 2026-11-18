@@ -149,49 +149,77 @@ export const DrillDetailPage: React.FC = () => {
     });
   };
 
-  // Toggle floor sweep clearance status
+  // Toggle floor sweep clearance status (decoupled from headcount)
   const handleFloorCycle = (checkinId: string, currentStatus: string) => {
     const checkin = drill.floorCheckins.find((c) => c.id === checkinId);
     if (!checkin) return;
 
     let nextStatus: 'pending' | 'in_progress' | 'cleared';
-    let nextAccounted = checkin.accountedCount;
     let nextClearedAt = checkin.clearedAt;
 
     if (currentStatus === 'pending') {
       nextStatus = 'in_progress';
     } else if (currentStatus === 'in_progress') {
       nextStatus = 'cleared';
-      nextAccounted = checkin.expectedCount;
       nextClearedAt = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     } else {
+      // Reopen sweep
       nextStatus = 'pending';
-      nextAccounted = 0;
       nextClearedAt = undefined;
     }
 
+    // Physical sweep is decoupled from headcount: accountedCount is preserved
     updateDrillCheckin(drill.id, checkinId, {
       status: nextStatus,
-      accountedCount: nextAccounted,
       clearedAt: nextClearedAt,
     });
-
-    // Recompute total accounted
-    const updatedCheckins = drill.floorCheckins.map((c) =>
-      c.id === checkinId ? { ...c, status: nextStatus, accountedCount: nextAccounted } : c
-    );
-    const newTotal = updatedCheckins.reduce((sum, c) => sum + c.accountedCount, 0);
-    updateDrill(drill.id, { participantsAccountedFor: newTotal });
   };
 
-  // Adjust total accountability count
+  // Adjust floor-specific headcount
+  const handleAdjustFloorAccounted = (checkinId: string, delta: number) => {
+    const checkin = drill.floorCheckins.find((c) => c.id === checkinId);
+    if (!checkin) return;
+    const newCount = Math.max(0, Math.min(checkin.expectedCount, checkin.accountedCount + delta));
+    updateDrillCheckin(drill.id, checkinId, { accountedCount: newCount });
+  };
+
+  const handleSetFloorAllAccounted = (checkinId: string) => {
+    const checkin = drill.floorCheckins.find((c) => c.id === checkinId);
+    if (!checkin) return;
+    updateDrillCheckin(drill.id, checkinId, { accountedCount: checkin.expectedCount });
+  };
+
+  // Adjust total accountability count by distributing delta across floors
   const handleAdjustAccountability = (delta: number) => {
-    const newCount = Math.max(0, Math.min(drill.participantsExpected, drill.participantsAccountedFor + delta));
-    updateDrill(drill.id, { participantsAccountedFor: newCount });
+    if (delta > 0) {
+      let remaining = delta;
+      for (const chk of drill.floorCheckins) {
+        if (remaining <= 0) break;
+        const available = chk.expectedCount - chk.accountedCount;
+        if (available > 0) {
+          const toAdd = Math.min(available, remaining);
+          updateDrillCheckin(drill.id, chk.id, { accountedCount: chk.accountedCount + toAdd });
+          remaining -= toAdd;
+        }
+      }
+    } else if (delta < 0) {
+      let remaining = Math.abs(delta);
+      for (let i = drill.floorCheckins.length - 1; i >= 0; i--) {
+        if (remaining <= 0) break;
+        const chk = drill.floorCheckins[i];
+        if (chk.accountedCount > 0) {
+          const toSub = Math.min(chk.accountedCount, remaining);
+          updateDrillCheckin(drill.id, chk.id, { accountedCount: chk.accountedCount - toSub });
+          remaining -= toSub;
+        }
+      }
+    }
   };
 
   const handleSetAllAccounted = () => {
-    updateDrill(drill.id, { participantsAccountedFor: drill.participantsExpected });
+    drill.floorCheckins.forEach((chk) => {
+      updateDrillCheckin(drill.id, chk.id, { accountedCount: chk.expectedCount });
+    });
   };
 
   // Add observation
@@ -703,33 +731,74 @@ export const DrillDetailPage: React.FC = () => {
                 </div>
               </div>
 
-              <div className="flex items-center gap-3 flex-shrink-0">
-                <div className="text-right">
+              <div className="flex flex-col sm:flex-row sm:items-center gap-3 flex-shrink-0">
+                <div className="text-left sm:text-right">
                   <span className="text-[10px] uppercase font-bold text-brand-graphite-400 block font-mono">
                     Floor Muster
                   </span>
-                  <span className="font-mono font-bold text-xs text-brand-graphite-900">
-                    {chk.accountedCount} / {chk.expectedCount}
+                  <span className="font-mono font-bold text-xs text-brand-graphite-900 block">
+                    {chk.accountedCount} / {chk.expectedCount}{' '}
+                    <span className="text-[10px] font-normal text-brand-graphite-500">
+                      ({chk.expectedCount > 0 ? Math.round((chk.accountedCount / chk.expectedCount) * 100) : 0}%)
+                    </span>
                   </span>
+                  {/* Floor-level Headcount Adjusters */}
+                  <div className="flex items-center gap-1 mt-1 print:hidden">
+                    <button
+                      type="button"
+                      onClick={() => handleAdjustFloorAccounted(chk.id, 10)}
+                      className="px-1.5 py-0.5 text-[10px] font-mono font-semibold rounded bg-brand-graphite-100 hover:bg-brand-graphite-200 text-brand-graphite-800 transition-colors"
+                      title="Add 10 accounted occupants"
+                    >
+                      +10
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleAdjustFloorAccounted(chk.id, 50)}
+                      className="px-1.5 py-0.5 text-[10px] font-mono font-semibold rounded bg-brand-graphite-100 hover:bg-brand-graphite-200 text-brand-graphite-800 transition-colors"
+                      title="Add 50 accounted occupants"
+                    >
+                      +50
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSetFloorAllAccounted(chk.id)}
+                      className="px-1.5 py-0.5 text-[10px] font-mono font-semibold rounded bg-emerald-100 hover:bg-emerald-200 text-emerald-900 transition-colors"
+                      title="Mark all floor occupants accounted"
+                    >
+                      All
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleAdjustFloorAccounted(chk.id, -10)}
+                      className="px-1.5 py-0.5 text-[10px] font-mono rounded bg-brand-graphite-100 hover:bg-brand-graphite-200 text-brand-graphite-600 transition-colors"
+                      title="Subtract 10 occupants"
+                    >
+                      -10
+                    </button>
+                  </div>
                 </div>
 
-                <Button
-                  size="sm"
-                  variant={
-                    chk.status === 'cleared'
-                      ? 'outline'
+                <div className="flex sm:flex-col items-center gap-1">
+                  <Button
+                    size="sm"
+                    variant={
+                      chk.status === 'cleared'
+                        ? 'outline'
+                        : chk.status === 'in_progress'
+                        ? 'primary'
+                        : 'outline'
+                    }
+                    onClick={() => handleFloorCycle(chk.id, chk.status)}
+                    className="w-full"
+                  >
+                    {chk.status === 'pending'
+                      ? 'Start Sweep'
                       : chk.status === 'in_progress'
-                      ? 'primary'
-                      : 'outline'
-                  }
-                  onClick={() => handleFloorCycle(chk.id, chk.status)}
-                >
-                  {chk.status === 'pending'
-                    ? 'Start Sweep'
-                    : chk.status === 'in_progress'
-                    ? 'Confirm Cleared'
-                    : 'Reopen Sweep'}
-                </Button>
+                      ? 'Confirm Cleared'
+                      : 'Reopen Sweep'}
+                  </Button>
+                </div>
               </div>
             </div>
           ))}

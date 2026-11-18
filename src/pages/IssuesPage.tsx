@@ -749,20 +749,27 @@ export const IssuesPage: React.FC = () => {
                       >
                         Reopen
                       </Button>
-                      <Button
-                        size="sm"
-                        variant="primary"
-                        icon={ShieldCheck}
-                        onClick={() => {
-                          setVerifyModalIssue(issue);
-                          setVerificationOfficer(user?.name || 'Marcus Vance');
-                          setVerificationText(
-                            'Physical inspection conducted on-site. Replacement verified operational and compliant with institutional fire and life safety code.'
-                          );
-                        }}
-                      >
-                        Verify & Close
-                      </Button>
+                      {(isAdmin || user?.role === 'safety_officer') ? (
+                        <Button
+                          size="sm"
+                          variant="primary"
+                          icon={ShieldCheck}
+                          onClick={() => {
+                            setVerifyModalIssue(issue);
+                            setVerificationOfficer(user?.name || 'Marcus Vance');
+                            setVerificationText(
+                              'Physical inspection conducted on-site. Replacement verified operational and compliant with institutional fire and life safety code.'
+                            );
+                          }}
+                          className="bg-emerald-600 hover:bg-emerald-700 text-white border-none"
+                        >
+                          Verify & Close
+                        </Button>
+                      ) : (
+                        <Badge variant="warning" size="sm">
+                          Awaiting Admin Sign-off
+                        </Badge>
+                      )}
                     </div>
                   )}
 

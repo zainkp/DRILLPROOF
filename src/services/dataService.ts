@@ -229,7 +229,43 @@ export class DataService {
           }
         }
 
-        // 3. Reconcile building activeIssuesCount
+        // 3. Reconcile stored drills
+        const storedDrills = safeGet<Drill[]>(STORAGE_KEYS.DRILLS, mockDrills);
+        let drillsChanged = false;
+
+        const fireScheduledExists = storedDrills.some((d) => d.id === 'drl-fire-scheduled');
+        if (!fireScheduledExists) {
+          const freshDrill = mockDrills.find((d) => d.id === 'drl-fire-scheduled');
+          if (freshDrill) {
+            storedDrills.unshift(freshDrill);
+            drillsChanged = true;
+          }
+        }
+
+        for (const drl of storedDrills) {
+          if ((drl.participantsExpected === 1250 || drl.id === 'drl-fire-scheduled') && drl.buildingId === 'bld-academic') {
+            const expectedSum = drl.floorCheckins.reduce((s, c) => s + (c.expectedCount || 0), 0);
+            if (expectedSum !== 1250 || drl.floorCheckins.length < 4) {
+              drl.participantsExpected = 1250;
+              drl.floorCheckins = [
+                { id: `ck-${drl.id}-0`, floorId: 'flr-acad-0', floorLabel: 'Ground Floor (Atrium & Lecture Halls 1-4)', wardenName: 'Prof. Ananya Sen (Building Warden)', accountedCount: 0, expectedCount: 450, status: 'pending' },
+                { id: `ck-${drl.id}-1`, floorId: 'flr-acad-1', floorLabel: 'Level 1 (Computer Laboratories & Faculty Offices)', wardenName: 'Rohan Deshmukh (Floor Warden)', accountedCount: 0, expectedCount: 320, status: 'pending' },
+                { id: `ck-${drl.id}-2`, floorId: 'flr-acad-2', floorLabel: 'Level 2 (Chemistry & Material Science Labs)', wardenName: 'Dr. Meera Nambiar (Floor Warden)', accountedCount: 0, expectedCount: 260, status: 'pending' },
+                { id: `ck-${drl.id}-3`, floorId: 'flr-acad-3', floorLabel: 'Level 3 (Departmental Library & Research Suites)', wardenName: 'Tenzing Norbu (Floor Warden)', accountedCount: 0, expectedCount: 220, status: 'pending' },
+              ];
+              drl.participantsAccountedFor = 0;
+              drillsChanged = true;
+            }
+          }
+
+          const realAccounted = drl.floorCheckins.reduce((s, c) => s + (c.accountedCount || 0), 0);
+          if (drl.participantsAccountedFor !== realAccounted) {
+            drl.participantsAccountedFor = realAccounted;
+            drillsChanged = true;
+          }
+        }
+
+        // 4. Reconcile building activeIssuesCount
         const storedBuildings = safeGet<Building[]>(STORAGE_KEYS.BUILDINGS, mockBuildings);
         let buildingsChanged = false;
         for (const bld of storedBuildings) {
@@ -244,6 +280,7 @@ export class DataService {
         }
 
         if (inspectionsChanged) safeSet(STORAGE_KEYS.INSPECTIONS, storedInspections);
+        if (drillsChanged) safeSet(STORAGE_KEYS.DRILLS, storedDrills);
         if (issuesChanged) safeSet(STORAGE_KEYS.ISSUES, storedIssues);
         if (buildingsChanged) safeSet(STORAGE_KEYS.BUILDINGS, storedBuildings);
       } catch (e) {
@@ -695,7 +732,24 @@ export class DataService {
 
   // Inspections
   static getInspections(): Inspection[] {
-    return safeGet<Inspection[]>(STORAGE_KEYS.INSPECTIONS, mockInspections);
+    const inspections = safeGet<Inspection[]>(STORAGE_KEYS.INSPECTIONS, mockInspections);
+    return inspections.map((insp) => {
+      const pCount = insp.items.filter((i) => i.status === 'pass').length;
+      const aCount = insp.items.filter((i) => i.status === 'needs_attention').length;
+      const uCount = insp.items.filter((i) => i.status === 'not_checked').length;
+      const ev = pCount + aCount;
+      const sc = ev > 0 ? Math.round((pCount / ev) * 100) : 0;
+      const st: Inspection['status'] =
+        uCount > 0 ? 'pending' : aCount > 0 ? 'needs_attention' : 'passed';
+      return {
+        ...insp,
+        passedCount: pCount,
+        attentionCount: aCount,
+        notCheckedCount: uCount,
+        score: sc,
+        status: st,
+      };
+    });
   }
 
   static getInspectionById(id: string): Inspection | undefined {
@@ -822,7 +876,14 @@ export class DataService {
 
   // Drills
   static getDrills(): Drill[] {
-    return safeGet<Drill[]>(STORAGE_KEYS.DRILLS, mockDrills);
+    const drills = safeGet<Drill[]>(STORAGE_KEYS.DRILLS, mockDrills);
+    return drills.map((d) => {
+      const realAccounted = d.floorCheckins.reduce((s, c) => s + (c.accountedCount || 0), 0);
+      return {
+        ...d,
+        participantsAccountedFor: realAccounted,
+      };
+    });
   }
 
   static getDrillById(id: string): Drill | undefined {
