@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useData } from '../hooks/useData';
 import { ImageStorageService } from '../services/imageStorage';
 import {
@@ -34,6 +34,7 @@ import { Button } from '../components/ui/Button';
 import { QRCodeSVG } from 'qrcode.react';
 
 export const PublicBuildingPage: React.FC = () => {
+  const navigate = useNavigate();
   const { slug, buildingId } = useParams<{ slug?: string; buildingId?: string }>();
   const { buildings, floors, institution } = useData();
 
@@ -118,24 +119,15 @@ export const PublicBuildingPage: React.FC = () => {
                 Verified Campus Demo Passports
               </span>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                <Link
-                  to="/building/academic-block"
-                  className="p-2 text-center rounded border border-brand-border bg-brand-graphite-50 hover:bg-brand-graphite-100 hover:border-brand-red text-xs font-semibold text-brand-graphite-800 transition-colors"
-                >
-                  Academic Block
-                </Link>
-                <Link
-                  to="/building/admin-complex"
-                  className="p-2 text-center rounded border border-brand-border bg-brand-graphite-50 hover:bg-brand-graphite-100 hover:border-brand-red text-xs font-semibold text-brand-graphite-800 transition-colors"
-                >
-                  Admin Complex
-                </Link>
-                <Link
-                  to="/building/student-residence"
-                  className="p-2 text-center rounded border border-brand-border bg-brand-graphite-50 hover:bg-brand-graphite-100 hover:border-brand-red text-xs font-semibold text-brand-graphite-800 transition-colors"
-                >
-                  Hostel Tower A
-                </Link>
+                {buildings.map((b) => (
+                  <Link
+                    key={b.id}
+                    to={`/building/${b.slug || b.id}`}
+                    className="p-2 text-center rounded border border-brand-border bg-brand-graphite-50 hover:bg-brand-graphite-100 hover:border-brand-red text-xs font-semibold text-brand-graphite-800 transition-colors"
+                  >
+                    {b.name}
+                  </Link>
+                ))}
               </div>
             </div>
 
@@ -162,6 +154,13 @@ export const PublicBuildingPage: React.FC = () => {
   const [selectedFloorId, setSelectedFloorId] = useState<string>(
     buildingFloors[0]?.id || ''
   );
+
+  // Synchronize selected floor when building changes
+  useEffect(() => {
+    if (buildingFloors.length > 0) {
+      setSelectedFloorId(buildingFloors[0].id);
+    }
+  }, [building?.id]);
 
   const selectedFloor =
     buildingFloors.find((f) => f.id === selectedFloorId) || buildingFloors[0];
@@ -194,19 +193,119 @@ export const PublicBuildingPage: React.FC = () => {
 
   const displayPlanUrl = resolvedPlanUrl || selectedFloor?.floorPlanUrl;
 
+  // Institutional default hazard instructions if building plan has none configured
+  const defaultHazardInstructions = [
+    {
+      hazard: 'fire' as const,
+      title: 'Fire & Smoke Evacuation Protocol',
+      immediateActions: [
+        'Trigger the nearest red manual call station pull box immediately.',
+        'Alert nearby classrooms, offices, and occupants. Close doors behind you.',
+        'Evacuate systematically via designated fire stairwells. Do NOT use elevators.',
+        'Report to designated assembly area and check in with your Floor Warden.',
+      ],
+      evacuationRouteNote: 'Follow marked green illuminated exit signage directly to outside grade level.',
+      doNotDo: [
+        'Do NOT use elevators under any circumstances.',
+        'Do NOT stop to collect heavy personal baggage or items.',
+        'Do NOT re-enter the facility until the All Clear is sounded by Safety Officers.',
+      ],
+    },
+    {
+      hazard: 'earthquake' as const,
+      title: 'Earthquake — Drop, Cover & Hold Protocol',
+      immediateActions: [
+        'DROP to your hands and knees immediately to prevent being knocked down.',
+        'COVER your head and neck under sturdy desks, tables, or interior weight-bearing walls.',
+        'HOLD ON until ground shaking stops completely.',
+        'Once vibrations cease, systematically evacuate via marked stairwells to open muster areas.',
+      ],
+      evacuationRouteNote: 'Move away from glass curtain walls and overhead fixtures before evacuating.',
+      doNotDo: [
+        'Do NOT run outside while shaking is in progress.',
+        'Do NOT stand under glass skylights or unsupported shelving.',
+      ],
+    },
+    {
+      hazard: 'flood' as const,
+      title: 'Severe Water Ingress / Flash Flood Protocol',
+      immediateActions: [
+        'Isolate local electrical circuits if safe to do so.',
+        'Relocate sensitive electronic equipment and important items to upper levels.',
+        'Direct all building occupants to designated upper floor muster zones.',
+      ],
+      evacuationRouteNote: 'Do not traverse flooded basement car parks or lower pedestrian pathways.',
+      doNotDo: [
+        'Do NOT step into standing water near electrical panels or machinery.',
+        'Do NOT attempt to operate submerged equipment.',
+      ],
+    },
+    {
+      hazard: 'medical' as const,
+      title: 'Critical Medical Emergency Protocol',
+      immediateActions: [
+        'Call Campus Emergency Dispatch immediately (+91 80 4421 9911).',
+        'State exact facility, floor level, room location, and casualty condition.',
+        'Retrieve nearest First Aid kit or automated external defibrillator (AED).',
+        'Direct emergency responders to nearest elevator or stretcher access point.',
+      ],
+      evacuationRouteNote: 'Maintain primary egress corridor clear for paramedic stretcher access.',
+      doNotDo: [
+        'Do NOT move casualties with suspected spinal injuries unless in immediate peril.',
+        'Do NOT crowd the first-aid area.',
+      ],
+    },
+  ];
+
+  const hazardInstructionsList =
+    building.plan?.hazardInstructions && building.plan.hazardInstructions.length > 0
+      ? building.plan.hazardInstructions
+      : defaultHazardInstructions;
+
   const hazardInstruction =
-    building.plan.hazardInstructions.find((h) => h.hazard === activeHazard) ||
-    building.plan.hazardInstructions[0];
+    hazardInstructionsList.find((h) => h.hazard === activeHazard) ||
+    hazardInstructionsList[0];
 
   const primaryAssemblyPoint =
-    building.assemblyPoints.find((a) => a.isPrimary) || building.assemblyPoints[0];
+    building.assemblyPoints?.find((a) => a.isPrimary) ||
+    building.assemblyPoints?.[0] || {
+      id: 'ap-campus-default',
+      name: 'Main Campus Assembly Ground (East Athletic Field)',
+      code: 'ASM-MAIN',
+      locationDescription: 'Open athletic grounds adjacent to perimeter road. Follow floor warden directions.',
+      capacity: 1500,
+      isPrimary: true,
+    };
 
-  const secondaryAssemblyPoints = building.assemblyPoints.filter((a) => !a.isPrimary);
+  const secondaryAssemblyPoints =
+    building.assemblyPoints?.filter((a) => !a.isPrimary) || [];
+
+  const contactsList =
+    building.emergencyContacts && building.emergencyContacts.length > 0
+      ? building.emergencyContacts
+      : [
+          {
+            id: 'ec-default-1',
+            role: 'Campus Safety & Emergency Dispatch',
+            name: 'Central Control Room',
+            phone: '+91 (0) 80 4421 9911',
+            priority: 1,
+            isExternal: false,
+          },
+          {
+            id: 'ec-default-2',
+            role: 'Municipal Fire & Rescue Service',
+            name: 'Emergency Dispatch',
+            phone: '101 / 112',
+            priority: 2,
+            isExternal: true,
+          },
+        ];
 
   const currentUrl =
     typeof window !== 'undefined'
-      ? `${window.location.origin}/building/${building.slug}`
-      : `https://drillproof.io/building/${building.slug}`;
+      ? `${window.location.origin}/building/${building.slug || building.id}`
+      : `https://drillproof.io/building/${building.slug || building.id}`;
 
   const handleCopy = () => {
     navigator.clipboard.writeText(currentUrl);
@@ -216,35 +315,56 @@ export const PublicBuildingPage: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-brand-canvas text-brand-graphite-900 font-sans pb-16">
-      {/* 1. High-visibility Emergency Top Bar */}
-      <div className="bg-brand-red text-white px-4 py-2.5 text-xs font-semibold flex items-center justify-between shadow-xs select-none sticky top-0 z-40">
-        <div className="flex items-center gap-2">
-          <AlertTriangle className="w-4 h-4 text-white animate-pulse" />
-          <span className="tracking-wide">BUILDING EMERGENCY PASSPORT</span>
-          <span className="hidden sm:inline-block font-mono bg-black/20 px-1.5 py-0.5 rounded text-[10px]">
-            PASSPORT: {building.code}
-          </span>
-        </div>
+      {/* 1. Facility Header Card with Multi-Building Selector */}
+      <div className="bg-white border-b border-brand-border px-4 py-6 sm:px-8 shadow-xs">
+        <div className="max-w-4xl mx-auto space-y-4">
+          {/* Top Context & Building Switcher Bar */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-brand-border/70">
+            <div className="flex items-center gap-2 text-xs font-mono text-brand-graphite-500 uppercase tracking-wider">
+              <Building2 className="w-3.5 h-3.5 text-brand-red flex-shrink-0" />
+              <span className="font-bold text-brand-graphite-800">{institution.name}</span>
+              <span>&bull;</span>
+              <span>Public Emergency Guide</span>
+            </div>
 
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setQrModalOpen(true)}
-            className="flex items-center gap-1.5 bg-black/20 hover:bg-black/40 px-2.5 py-1 rounded text-xs transition-colors font-mono"
-            title="Display QR code"
-          >
-            <QrCode className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">QR Access</span>
-          </button>
-        </div>
-      </div>
+            {/* Dynamic Multi-Building Selector Dropdown */}
+            <div className="flex items-center gap-2">
+              <label
+                htmlFor="public-building-select"
+                className="text-[11px] font-mono text-brand-graphite-500 uppercase font-bold tracking-wider whitespace-nowrap"
+              >
+                Facility:
+              </label>
+              <div className="relative">
+                <select
+                  id="public-building-select"
+                  value={building.id}
+                  onChange={(e) => {
+                    const target = buildings.find((b) => b.id === e.target.value);
+                    if (target) {
+                      navigate(`/building/${target.slug || target.id}`);
+                    }
+                  }}
+                  className="appearance-none bg-brand-graphite-50 hover:bg-white text-brand-graphite-900 font-sans font-semibold text-xs py-1.5 pl-3 pr-8 rounded border border-brand-border hover:border-brand-graphite-400 focus:border-brand-red focus:outline-none focus:ring-1 focus:ring-brand-red transition-all cursor-pointer shadow-xs"
+                >
+                  {buildings.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.name} {b.code ? `(${b.code})` : ''}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown className="w-3.5 h-3.5 text-brand-graphite-500 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              </div>
+            </div>
+          </div>
 
-      {/* 2. Facility Header Card */}
-      <div className="bg-white border-b border-brand-border px-4 py-6 sm:px-8">
-        <div className="max-w-4xl mx-auto">
+          {/* Building Identity & Vital Stats */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
               <div className="flex items-center gap-2 text-xs font-mono text-brand-graphite-500 uppercase tracking-wider mb-1">
-                <span>{institution.name}</span>
+                <span className="font-bold text-brand-graphite-700 bg-brand-graphite-100 px-1.5 py-0.5 rounded border border-brand-border/60">
+                  {building.code || 'BLD'}
+                </span>
                 <span>&bull;</span>
                 <span className="font-bold text-brand-graphite-700">{building.type.toUpperCase()}</span>
               </div>
@@ -257,19 +377,33 @@ export const PublicBuildingPage: React.FC = () => {
               </p>
             </div>
 
-            <div className="flex items-center gap-3">
-              <div className="bg-brand-graphite-50 border border-brand-border px-3 py-2 rounded text-center">
+            <div className="flex flex-wrap items-center gap-2 sm:gap-3 flex-shrink-0">
+              <div className="bg-brand-graphite-50 border border-brand-border px-3 py-2 rounded text-center min-w-[64px]">
                 <span className="text-[10px] font-mono text-brand-graphite-500 uppercase block">Levels</span>
                 <span className="text-base font-bold font-mono text-brand-graphite-900">{building.totalFloors}</span>
               </div>
-              <div className="bg-brand-graphite-50 border border-brand-border px-3 py-2 rounded text-center">
+              <div className="bg-brand-graphite-50 border border-brand-border px-3 py-2 rounded text-center min-w-[72px]">
                 <span className="text-[10px] font-mono text-brand-graphite-500 uppercase block">Capacity</span>
                 <span className="text-base font-bold font-mono text-brand-graphite-900">{building.occupancyCapacity}</span>
               </div>
-              <div className="bg-emerald-50 border border-emerald-200 px-3 py-2 rounded text-center">
+              <div className="bg-emerald-50 border border-emerald-200 px-3 py-2 rounded text-center min-w-[80px]">
                 <span className="text-[10px] font-mono text-emerald-700 uppercase block">Safety Plan</span>
                 <span className="text-xs font-bold text-emerald-800 uppercase font-mono">VERIFIED</span>
               </div>
+              <button
+                type="button"
+                onClick={() => setQrModalOpen(true)}
+                className="bg-brand-graphite-50 hover:bg-brand-graphite-100 border border-brand-border hover:border-brand-graphite-400 px-3 py-2 rounded text-center transition-colors group cursor-pointer"
+                title="Display QR code for this building"
+              >
+                <span className="text-[10px] font-mono text-brand-graphite-500 uppercase block flex items-center justify-center gap-1">
+                  <QrCode className="w-3 h-3 text-brand-graphite-600 group-hover:text-brand-red" />
+                  <span>QR Code</span>
+                </span>
+                <span className="text-xs font-bold text-brand-graphite-800 group-hover:text-brand-red font-mono uppercase">
+                  SHARE
+                </span>
+              </button>
             </div>
           </div>
         </div>
@@ -333,7 +467,7 @@ export const PublicBuildingPage: React.FC = () => {
 
           {/* Hazard Tab Buttons */}
           <div className="flex overflow-x-auto border-b border-brand-border bg-white divide-x divide-brand-border">
-            {building.plan.hazardInstructions.map((inst) => {
+            {hazardInstructionsList.map((inst) => {
               const isActive = activeHazard === inst.hazard;
               return (
                 <button
@@ -599,7 +733,7 @@ export const PublicBuildingPage: React.FC = () => {
           </div>
 
           <div className="divide-y divide-brand-border">
-            {building.emergencyContacts.map((c) => (
+            {contactsList.map((c) => (
               <div
                 key={c.id}
                 className="p-3.5 sm:px-6 flex items-center justify-between gap-3 text-xs"
