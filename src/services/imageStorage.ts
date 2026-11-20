@@ -178,8 +178,14 @@ class ImageStorage {
   resolvePlanUrl(url: string | undefined, buildingId: string, floorId: string): Promise<string | null> {
     if (!url) return Promise.resolve(null);
 
-    // If it's already an inline SVG or data URL, return directly
-    if (url.startsWith('data:') || url.startsWith('http://') || url.startsWith('https://')) {
+    // If it's already an inline SVG, data URL, or static asset path, return directly
+    if (
+      url.startsWith('data:') ||
+      url.startsWith('http://') ||
+      url.startsWith('https://') ||
+      url.startsWith('/') ||
+      url.startsWith('./')
+    ) {
       return Promise.resolve(url);
     }
 

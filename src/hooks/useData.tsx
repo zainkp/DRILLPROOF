@@ -60,6 +60,7 @@ interface DataContextType {
   updateDrill: (id: string, updates: Partial<Drill>) => void;
   deleteDrill: (id: string) => boolean;
   updateDrillCheckin: (drillId: string, checkinId: string, updates: Partial<Drill['floorCheckins'][0]>) => void;
+  updateDrillCheckinsBulk: (drillId: string, updates: Array<{ checkinId: string; updates: Partial<Drill['floorCheckins'][0]> }>) => void;
   addDrillObservation: (drillId: string, obs: Omit<Drill['observations'][0], 'id'>) => void;
   createSafetyIssue: (issue: Omit<SafetyIssue, 'id' | 'code' | 'createdAt'>) => SafetyIssue;
   updateSafetyIssue: (id: string, updates: Partial<SafetyIssue>) => void;
@@ -263,6 +264,11 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     refresh();
   }, [refresh]);
 
+  const handleUpdateDrillCheckinsBulk = useCallback((drillId: string, updates: Array<{ checkinId: string; updates: Partial<Drill['floorCheckins'][0]> }>) => {
+    DataService.updateDrillCheckinsBulk(drillId, updates);
+    refresh();
+  }, [refresh]);
+
   const handleAddDrillObservation = useCallback((drillId: string, obs: Omit<Drill['observations'][0], 'id'>) => {
     DataService.addDrillObservation(drillId, obs);
     refresh();
@@ -363,6 +369,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         updateDrill: handleUpdateDrill,
         deleteDrill: handleDeleteDrill,
         updateDrillCheckin: handleUpdateDrillCheckin,
+        updateDrillCheckinsBulk: handleUpdateDrillCheckinsBulk,
         addDrillObservation: handleAddDrillObservation,
         createSafetyIssue: handleCreateSafetyIssue,
         updateSafetyIssue: handleUpdateSafetyIssue,

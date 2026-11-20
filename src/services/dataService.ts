@@ -106,20 +106,51 @@ export class DataService {
     } else {
       // Data migration & integrity reconciliation
       try {
-        // 1. Reconcile floors
+        // 1. Reconcile floors and apply designated fire exit plans
         const storedFloors = safeGet<Floor[]>(STORAGE_KEYS.FLOORS, []);
         let floorsUpdated = false;
+
+        const buildingPlanMap: Record<string, { url: string; disclaimer: string }> = {
+          'bld-academic': {
+            url: '/plans/fire-exit-plan-academic.jpg',
+            disclaimer: 'Official Fire Exit Plan — Room 210-211 Route',
+          },
+          'bld-admin': {
+            url: '/plans/fire-exit-plan-admin.jpg',
+            disclaimer: 'Official Fire Exit Plan — Room 217-218 Route',
+          },
+          'bld-residence': {
+            url: '/plans/fire-exit-plan-residence.jpg',
+            disclaimer: 'Official Fire Exit Plan — Room 219-220 Route',
+          },
+          'bld-mech': {
+            url: '/plans/fire-exit-plan-mech.jpg',
+            disclaimer: 'Official Fire Exit Plan — Room 225-226 Route',
+          },
+          'bld-it': {
+            url: '/plans/fire-exit-plan-it.jpg',
+            disclaimer: 'Official Fire Exit Plan — Room 228 Route',
+          },
+        };
 
         for (const mf of mockFloors) {
           const found = storedFloors.find((f) => f.id === mf.id);
           if (!found) {
             storedFloors.push(mf);
             floorsUpdated = true;
-          } else if (!found.floorPlanUrl && mf.floorPlanUrl) {
-            found.floorPlanUrl = mf.floorPlanUrl;
-            found.floorPlanType = mf.floorPlanType;
-            found.floorPlanDisclaimer = mf.floorPlanDisclaimer;
-            floorsUpdated = true;
+          }
+        }
+
+        // Apply official fire exit plan to all floors in each building unless custom upload
+        for (const flr of storedFloors) {
+          const planConfig = buildingPlanMap[flr.buildingId];
+          if (planConfig && flr.floorPlanType !== 'upload') {
+            if (flr.floorPlanUrl !== planConfig.url) {
+              flr.floorPlanUrl = planConfig.url;
+              flr.floorPlanType = 'image';
+              flr.floorPlanDisclaimer = planConfig.disclaimer;
+              floorsUpdated = true;
+            }
           }
         }
 
@@ -258,6 +289,14 @@ export class DataService {
             }
           }
 
+          // Reconcile cleared floors whose accountedCount is out of sync with expectedCount
+          for (const chk of drl.floorCheckins) {
+            if (chk.status === 'cleared' && chk.accountedCount === 0 && chk.expectedCount > 0) {
+              chk.accountedCount = chk.expectedCount;
+              drillsChanged = true;
+            }
+          }
+
           const realAccounted = drl.floorCheckins.reduce((s, c) => s + (c.accountedCount || 0), 0);
           if (drl.participantsAccountedFor !== realAccounted) {
             drl.participantsAccountedFor = realAccounted;
@@ -265,9 +304,18 @@ export class DataService {
           }
         }
 
-        // 4. Reconcile building activeIssuesCount
+        // 4. Reconcile building activeIssuesCount and ensure all 5 registered buildings exist
         const storedBuildings = safeGet<Building[]>(STORAGE_KEYS.BUILDINGS, mockBuildings);
         let buildingsChanged = false;
+
+        for (const mb of mockBuildings) {
+          const found = storedBuildings.find((b) => b.id === mb.id);
+          if (!found) {
+            storedBuildings.push(mb);
+            buildingsChanged = true;
+          }
+        }
+
         for (const bld of storedBuildings) {
           const actualActive = storedIssues.filter(
             (iss) =>
@@ -919,7 +967,21 @@ export class DataService {
     const drills = this.getDrills();
     const index = drills.findIndex((d) => d.id === id);
     if (index === -1) return undefined;
-    drills[index] = { ...drills[index], ...updates };
+
+    // Calculate real accounted headcount if floorCheckins are updated
+    let participantsAccountedFor = updates.participantsAccountedFor;
+    if (updates.floorCheckins) {
+      participantsAccountedFor = updates.floorCheckins.reduce(
+        (sum, item) => sum + (item.accountedCount || 0),
+        0
+      );
+    }
+
+    drills[index] = {
+      ...drills[index],
+      ...updates,
+      ...(participantsAccountedFor !== undefined ? { participantsAccountedFor } : {}),
+    };
     safeSet(STORAGE_KEYS.DRILLS, drills);
     return drills[index];
   }
@@ -934,12 +996,47 @@ export class DataService {
 
     drill.floorCheckins = drill.floorCheckins.map((chk) => {
       if (chk.id === checkinId) {
-        return { ...chk, ...updates };
+        const next = { ...chk, ...updates };
+        if (updates.status === 'cleared' && updates.accountedCount === undefined) {
+          next.accountedCount = next.expectedCount;
+        } else if (
+          updates.status === 'in_progress' &&
+          chk.status === 'cleared' &&
+          updates.accountedCount === undefined
+        ) {
+          next.accountedCount = 0;
+        }
+        return next;
       }
       return chk;
     });
 
     // recalculate accounted
+    drill.participantsAccountedFor = drill.floorCheckins.reduce(
+      (sum, item) => sum + (item.accountedCount || 0),
+      0
+    );
+
+    return this.updateDrill(drillId, drill);
+  }
+
+  static updateDrillCheckinsBulk(
+    drillId: string,
+    checkinUpdates: Array<{ checkinId: string; updates: Partial<Drill['floorCheckins'][0]> }>
+  ): Drill | undefined {
+    const drill = this.getDrillById(drillId);
+    if (!drill) return undefined;
+
+    const updateMap = new Map(checkinUpdates.map((u) => [u.checkinId, u.updates]));
+
+    drill.floorCheckins = drill.floorCheckins.map((chk) => {
+      const u = updateMap.get(chk.id);
+      if (u) {
+        return { ...chk, ...u };
+      }
+      return chk;
+    });
+
     drill.participantsAccountedFor = drill.floorCheckins.reduce(
       (sum, item) => sum + (item.accountedCount || 0),
       0

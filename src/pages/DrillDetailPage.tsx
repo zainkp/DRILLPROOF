@@ -126,6 +126,14 @@ export const DrillDetailPage: React.FC = () => {
     });
   };
 
+  const handleAbortDrill = () => {
+    setTimerRunning(false);
+    updateDrill(drill.id, {
+      status: 'cancelled',
+      durationSeconds: elapsedSeconds,
+    });
+  };
+
   const handleCompleteDrill = () => {
     setTimerRunning(false);
     const finalSeconds = elapsedSeconds > 0 ? elapsedSeconds : drill.targetDurationSeconds;
@@ -149,76 +157,161 @@ export const DrillDetailPage: React.FC = () => {
     });
   };
 
-  // Toggle floor sweep clearance status (decoupled from headcount)
+  // Toggle floor sweep clearance status (synchronized with headcount)
   const handleFloorCycle = (checkinId: string, currentStatus: string) => {
-    const checkin = drill.floorCheckins.find((c) => c.id === checkinId);
-    if (!checkin) return;
+    const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const updatedCheckins = drill.floorCheckins.map((chk) => {
+      if (chk.id === checkinId) {
+        let nextStatus: 'pending' | 'in_progress' | 'cleared';
+        let nextClearedAt: string | undefined = chk.clearedAt;
+        let nextAccounted = chk.accountedCount;
 
-    let nextStatus: 'pending' | 'in_progress' | 'cleared';
-    let nextClearedAt = checkin.clearedAt;
+        if (chk.status === 'cleared') {
+          // Reopen sweep: switches to in_progress / sweeping, reverses floor headcount to unverified
+          nextStatus = 'in_progress';
+          nextClearedAt = undefined;
+          nextAccounted = 0;
+        } else if (chk.status === 'in_progress') {
+          // Mark Cleared: switches to cleared with timestamp and marks all floor occupants accounted
+          nextStatus = 'cleared';
+          nextClearedAt = currentTime;
+          nextAccounted = chk.expectedCount;
+        } else {
+          // pending: switches to in_progress
+          nextStatus = 'in_progress';
+        }
 
-    if (currentStatus === 'pending') {
-      nextStatus = 'in_progress';
-    } else if (currentStatus === 'in_progress') {
-      nextStatus = 'cleared';
-      nextClearedAt = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    } else {
-      // Reopen sweep
-      nextStatus = 'pending';
-      nextClearedAt = undefined;
-    }
+        return {
+          ...chk,
+          status: nextStatus,
+          clearedAt: nextClearedAt,
+          accountedCount: nextAccounted,
+        };
+      }
+      return chk;
+    });
 
-    // Physical sweep is decoupled from headcount: accountedCount is preserved
-    updateDrillCheckin(drill.id, checkinId, {
-      status: nextStatus,
-      clearedAt: nextClearedAt,
+    const newTotal = updatedCheckins.reduce((s, c) => s + (c.accountedCount || 0), 0);
+    updateDrill(drill.id, {
+      floorCheckins: updatedCheckins,
+      participantsAccountedFor: newTotal,
     });
   };
 
   // Adjust floor-specific headcount
   const handleAdjustFloorAccounted = (checkinId: string, delta: number) => {
-    const checkin = drill.floorCheckins.find((c) => c.id === checkinId);
-    if (!checkin) return;
-    const newCount = Math.max(0, Math.min(checkin.expectedCount, checkin.accountedCount + delta));
-    updateDrillCheckin(drill.id, checkinId, { accountedCount: newCount });
+    const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const updatedCheckins = drill.floorCheckins.map((chk) => {
+      if (chk.id === checkinId) {
+        const newCount = Math.max(0, Math.min(chk.expectedCount, chk.accountedCount + delta));
+        let nextStatus = chk.status;
+        let nextClearedAt = chk.clearedAt;
+
+        // When reaching full capacity via manual adjustment, reflect clearance
+        if (newCount === chk.expectedCount) {
+          nextStatus = 'cleared';
+          if (!nextClearedAt) {
+            nextClearedAt = currentTime;
+          }
+        } else if (newCount < chk.expectedCount && chk.status === 'cleared') {
+          // When dropping below full capacity, revert from cleared to in-progress
+          nextStatus = 'in_progress';
+          nextClearedAt = undefined;
+        }
+
+        return {
+          ...chk,
+          accountedCount: newCount,
+          status: nextStatus,
+          clearedAt: nextClearedAt,
+        };
+      }
+      return chk;
+    });
+    const newTotal = updatedCheckins.reduce((s, c) => s + (c.accountedCount || 0), 0);
+    updateDrill(drill.id, {
+      floorCheckins: updatedCheckins,
+      participantsAccountedFor: newTotal,
+    });
   };
 
   const handleSetFloorAllAccounted = (checkinId: string) => {
-    const checkin = drill.floorCheckins.find((c) => c.id === checkinId);
-    if (!checkin) return;
-    updateDrillCheckin(drill.id, checkinId, { accountedCount: checkin.expectedCount });
+    const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const updatedCheckins = drill.floorCheckins.map((chk) => {
+      if (chk.id === checkinId) {
+        return {
+          ...chk,
+          accountedCount: chk.expectedCount,
+          status: 'cleared' as const,
+          clearedAt: chk.clearedAt || currentTime,
+        };
+      }
+      return chk;
+    });
+    const newTotal = updatedCheckins.reduce((s, c) => s + (c.accountedCount || 0), 0);
+    updateDrill(drill.id, {
+      floorCheckins: updatedCheckins,
+      participantsAccountedFor: newTotal,
+    });
   };
 
   // Adjust total accountability count by distributing delta across floors
   const handleAdjustAccountability = (delta: number) => {
+    const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const updatedCheckins = drill.floorCheckins.map((c) => ({ ...c }));
     if (delta > 0) {
       let remaining = delta;
-      for (const chk of drill.floorCheckins) {
+      for (const chk of updatedCheckins) {
         if (remaining <= 0) break;
         const available = chk.expectedCount - chk.accountedCount;
         if (available > 0) {
           const toAdd = Math.min(available, remaining);
-          updateDrillCheckin(drill.id, chk.id, { accountedCount: chk.accountedCount + toAdd });
+          chk.accountedCount += toAdd;
           remaining -= toAdd;
+        }
+        if (chk.accountedCount === chk.expectedCount) {
+          chk.status = 'cleared';
+          if (!chk.clearedAt) chk.clearedAt = currentTime;
+        } else if (chk.status === 'pending') {
+          chk.status = 'in_progress';
         }
       }
     } else if (delta < 0) {
       let remaining = Math.abs(delta);
-      for (let i = drill.floorCheckins.length - 1; i >= 0; i--) {
+      for (let i = updatedCheckins.length - 1; i >= 0; i--) {
         if (remaining <= 0) break;
-        const chk = drill.floorCheckins[i];
+        const chk = updatedCheckins[i];
         if (chk.accountedCount > 0) {
           const toSub = Math.min(chk.accountedCount, remaining);
-          updateDrillCheckin(drill.id, chk.id, { accountedCount: chk.accountedCount - toSub });
+          chk.accountedCount -= toSub;
           remaining -= toSub;
+        }
+        if (chk.accountedCount < chk.expectedCount && chk.status === 'cleared') {
+          chk.status = 'in_progress';
+          chk.clearedAt = undefined;
         }
       }
     }
+
+    const newTotal = updatedCheckins.reduce((s, c) => s + (c.accountedCount || 0), 0);
+    updateDrill(drill.id, {
+      floorCheckins: updatedCheckins,
+      participantsAccountedFor: newTotal,
+    });
   };
 
   const handleSetAllAccounted = () => {
-    drill.floorCheckins.forEach((chk) => {
-      updateDrillCheckin(drill.id, chk.id, { accountedCount: chk.expectedCount });
+    const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const updatedCheckins = drill.floorCheckins.map((chk) => ({
+      ...chk,
+      accountedCount: chk.expectedCount,
+      status: 'cleared' as const,
+      clearedAt: chk.clearedAt || currentTime,
+    }));
+    const newTotal = updatedCheckins.reduce((s, c) => s + (c.accountedCount || 0), 0);
+    updateDrill(drill.id, {
+      floorCheckins: updatedCheckins,
+      participantsAccountedFor: newTotal,
     });
   };
 
@@ -275,8 +368,10 @@ export const DrillDetailPage: React.FC = () => {
   };
 
   // Accountability & Clearance metrics
-  const totalAccounted = drill.participantsAccountedFor;
-  const totalExpected = drill.participantsExpected;
+  const totalAccounted = drill.floorCheckins.reduce((s, c) => s + (c.accountedCount || 0), 0);
+  const totalExpected =
+    drill.participantsExpected ||
+    drill.floorCheckins.reduce((s, c) => s + (c.expectedCount || 0), 0);
   const missingCount = Math.max(0, totalExpected - totalAccounted);
   const accountabilityRate =
     totalExpected > 0 ? Math.round((totalAccounted / totalExpected) * 100) : 0;
@@ -341,6 +436,16 @@ export const DrillDetailPage: React.FC = () => {
         }
         actions={
           <div className="flex items-center gap-2 print:hidden">
+            {drill.status === 'in_progress' && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="text-red-700 hover:bg-red-50 hover:border-red-300"
+                onClick={handleAbortDrill}
+              >
+                Abort Drill
+              </Button>
+            )}
             {drill.status !== 'completed' ? (
               <Button
                 size="sm"
@@ -792,11 +897,11 @@ export const DrillDetailPage: React.FC = () => {
                     onClick={() => handleFloorCycle(chk.id, chk.status)}
                     className="w-full"
                   >
-                    {chk.status === 'pending'
-                      ? 'Start Sweep'
+                    {chk.status === 'cleared'
+                      ? 'Reopen Sweep'
                       : chk.status === 'in_progress'
-                      ? 'Confirm Cleared'
-                      : 'Reopen Sweep'}
+                      ? 'Mark Cleared'
+                      : 'Start Sweep'}
                   </Button>
                 </div>
               </div>
